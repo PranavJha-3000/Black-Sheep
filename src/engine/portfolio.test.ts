@@ -6,9 +6,12 @@ import {
   checkLiquidation,
   closePosition,
   createFund,
+  deriveCauseOfDeath,
   getExposure,
+  liquidateFund,
   markToMarket,
   openPosition,
+  peakNav,
   totalMarginReserved,
 } from './portfolio';
 
@@ -194,4 +197,47 @@ describe('portfolio engine', () => {
       expect(result.message).toContain('healthy');
     });
   });
+
+describe("liquidation", () => {
+  it("liquidateFund closes all positions at market price", () => {
+    let fund = createFund(1_000_000);
+    fund = openPosition(fund, "NOVA", "long", 100_000, 285);
+    fund = openPosition(fund, "TITAN", "short", 100_000, 87);
+    expect(fund.positions.length).toBe(2);
+    const market = marketWithPrice("NOVA", 300);
+    market.companies["TITAN"] = { ...market.companies["TITAN"], price: 80 };
+    const closed = liquidateFund(fund, market);
+    expect(closed.positions.length).toBe(0);
+    expect(closed.realizedPnL).not.toBe(0);
+  });
+  it("deriveCauseOfDeath returns concentration for one dominant position", () => {
+    let fund = createFund(1_000_000);
+    fund = openPosition(fund, "NOVA", "long", 900_000, 100);
+    const market = marketWithPrice("NOVA", 100);
+    expect(deriveCauseOfDeath(fund, market)).toContain("concentration");
+    expect(deriveCauseOfDeath(fund, market)).toContain("NOVA");
+  });
+  it("deriveCauseOfDeath returns leverage for distributed positions", () => {
+    let fund = createFund(1_000_000);
+    fund = openPosition(fund, "NOVA", "long", 200_000, 100);
+    fund = openPosition(fund, "TITAN", "long", 200_000, 50);
+    fund = openPosition(fund, "ORBL", "long", 200_000, 200);
+    const market = marketWithPrice("NOVA", 100);
+    expect(deriveCauseOfDeath(fund, market)).toBe("Excessive leverage");
+  });
+  it("peakNav returns the highest NAV from history", () => {
+    const fund = createFund(1_000_000);
+    fund.history = [
+      { timestamp: 0, nav: 1_000_000 },
+      { timestamp: 1, nav: 1_500_000 },
+      { timestamp: 2, nav: 1_200_000 },
+    ];
+    expect(peakNav(fund)).toBe(1_500_000);
+  });
+  it("peakNav falls back to startingCapital when no history", () => {
+    const fund = createFund(2_000_000);
+    fund.history = [];
+    expect(peakNav(fund)).toBe(2_000_000);
+  });
+});
 });
