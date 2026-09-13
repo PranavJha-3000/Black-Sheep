@@ -18,8 +18,11 @@ import type { Direction, MarketState, Position, Ticker } from './types';
  * When you open a short, you must reserve this fraction of the position's
  * notional value as margin. This cash is locked and can't be spent.
  * 50% matches the real-world Reg-T initial margin requirement.
+ *
+ * Exported so the server can reconstruct engine Positions from persisted rows
+ * (the DB does not store marginReserved) without duplicating the constant.
  */
-const INITIAL_MARGIN_RATE = 0.5;
+export const INITIAL_MARGIN_RATE = 0.5;
 
 /**
  * Maintenance margin rate for short positions.

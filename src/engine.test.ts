@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { applyEvent, createInitialMarket, mulberry32, tickMarket } from './engine/market';
-import { buildScriptedEvent, maybeFireScriptedEvent, initialScheduler, pickTemplate } from './engine/events';
-import type { MarketEvent, MarketState } from './engine/types';
+import { applyEvent, applyTrade, computePriceImpact, createInitialMarket, getNetFlow, mulberry32, tickMarket } from '@black-sheep/engine/market';
+import { buildScriptedEvent, maybeFireScriptedEvent, initialScheduler, pickTemplate } from '@black-sheep/engine/events';
+import type { MarketEvent, MarketState } from '@black-sheep/engine/types';
 function runTicks(s: MarketState, seed: number, n: number): MarketState { let x = s; for (let i = 0; i < n; i++) x = tickMarket(x, seed); return x; }
 describe('market engine', () => {
   const market = createInitialMarket();
@@ -79,3 +79,108 @@ describe('market engine', () => {
   });
 });
 function avgPct(s: MarketState, seed: number, n: number, t: string): number { let x = s; let tot = 0; let prev = x.companies[t].price; for (let i = 0; i < n; i++) { x = tickMarket(x, seed); const p = x.companies[t].price; tot += Math.abs(p / prev - 1); prev = p; } return (tot / n) * 100; }
+
+describe('market-impact engine', () => {
+  const market = createInitialMarket();
+
+  it('seeds liquidity inversely to volatility (HELX thin, APXB deep)', () => {
+    // HELX biotech has the highest volatility and should be the most illiquid.
+    // APXB bank has the lowest volatility and should be the most liquid.
+    expect(market.companies.HELX.liquidity).toBeLessThan(market.companies.APXB.liquidity);
+    expect(market.companies.HELX.liquidity).toBe(40_000_000);
+    expect(market.companies.APXB.liquidity).toBe(1_200_000_000);
+    // All companies have positive liquidity.
+    for (const t of Object.keys(market.companies)) {
+      expect(market.companies[t].liquidity).toBeGreaterThan(0);
+    }
+  });
+
+  it('$5M buy on low-liquidity HELX moves price more than $5M buy on high-liquidity APXB', () => {
+    const base = market;
+    const helxBefore = base.companies.HELX.price;
+    const apxbBefore = base.companies.APXB.price;
+
+    const afterHelx = applyTrade(base, 'HELX', 5_000_000, 'buy');
+    const afterApxb = applyTrade(base, 'APXB', 5_000_000, 'buy');
+
+    const helxMove = Math.abs(afterHelx.companies.HELX.price / helxBefore - 1);
+    const apxbMove = Math.abs(afterApxb.companies.APXB.price / apxbBefore - 1);
+
+    // HELX (thin) should move roughly 5-6x more than APXB (deep).
+    expect(helxMove).toBeGreaterThan(apxbMove);
+    expect(helxMove).toBeGreaterThan(apxbMove * 3);
+  });
+
+  it('impact never exceeds the 8% cap regardless of trade size', () => {
+    const base = market;
+    const before = base.companies.HELX.price;
+
+    // A $1B trade on a $40M-ADV stock would be 25x participation — raw impact
+    // would be ~50%, but the cap must hold it to 8%.
+    const after = applyTrade(base, 'HELX', 1_000_000_000, 'buy');
+    const move = Math.abs(after.companies.HELX.price / before - 1);
+    expect(move).toBeLessThanOrEqual(0.08 + 1e-9);
+
+    // Same cap applies to sells (downward).
+    const afterSell = applyTrade(base, 'HELX', 1_000_000_000, 'sell');
+    const sellMove = Math.abs(afterSell.companies.HELX.price / before - 1);
+    expect(sellMove).toBeLessThanOrEqual(0.08 + 1e-9);
+  });
+
+  it('computePriceImpact returns positive for buys, negative for sells', () => {
+    const c = market.companies.NOVA;
+    const buyImpact = computePriceImpact(c, 1_000_000, 'buy');
+    const sellImpact = computePriceImpact(c, 1_000_000, 'sell');
+    expect(buyImpact).toBeGreaterThan(0);
+    expect(sellImpact).toBeLessThan(0);
+    expect(buyImpact).toBe(-sellImpact);
+  });
+
+  it('getNetFlow aggregates same-direction trades and nets out opposing trades', () => {
+    let state = createInitialMarket();
+    // Three buys of $10M each on HELX at timestamps 0, 1, 2.
+    state = { ...state, timestamp: 0 };
+    state = applyTrade(state, 'HELX', 10_000_000, 'buy');
+    state = { ...state, timestamp: 1 };
+    state = applyTrade(state, 'HELX', 10_000_000, 'buy');
+    state = { ...state, timestamp: 2 };
+    state = applyTrade(state, 'HELX', 10_000_000, 'buy');
+
+    // Net flow over full window: +$30M.
+    expect(getNetFlow(state, 'HELX', 100)).toBe(30_000_000);
+
+    // Now add a $40M sell at timestamp 3.
+    state = { ...state, timestamp: 3 };
+    state = applyTrade(state, 'HELX', 40_000_000, 'sell');
+
+    // Net should be 3*10M - 40M = -$10M (net selling pressure).
+    expect(getNetFlow(state, 'HELX', 100)).toBe(-10_000_000);
+
+    // Lookback of 3 from timestamp 3: cutoff = 3-3 = 0, includes all trades.
+    expect(getNetFlow(state, 'HELX', 3)).toBe(-10_000_000);
+
+    // Lookback of 2 from timestamp 3: cutoff = 3-2 = 1, includes t=1,2,3 only.
+    // t=1: +10M, t=2: +10M, t=3: -40M => net -$20M (the t=0 trade is excluded).
+    expect(getNetFlow(state, 'HELX', 2)).toBe(-20_000_000);
+
+    // Lookback of 1 from timestamp 3: cutoff = 3-1 = 2, includes t=2,3 only.
+    // t=2: +10M, t=3: -40M => net -$30M.
+    expect(getNetFlow(state, 'HELX', 1)).toBe(-30_000_000);
+
+    // Flow for a different ticker is unaffected.
+    expect(getNetFlow(state, 'APXB', 100)).toBe(0);
+  });
+
+  it('applyTrade records flow and caps recentFlow to 50 entries', () => {
+    let state = createInitialMarket();
+    // Apply 60 small trades.
+    for (let i = 0; i < 60; i++) {
+      state = { ...state, timestamp: i };
+      state = applyTrade(state, 'NOVA', 100_000, 'buy');
+    }
+    expect(state.recentFlow.length).toBe(50);
+    // The oldest remaining trade should be at timestamp 10 (trades 0-9 dropped).
+    expect(state.recentFlow[0].timestamp).toBe(10);
+    expect(state.recentFlow.every((r) => r.ticker === 'NOVA')).toBe(true);
+  });
+});
