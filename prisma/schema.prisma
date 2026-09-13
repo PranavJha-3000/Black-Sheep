@@ -1,0 +1,163 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum RoomStatus {
+  active
+  ended
+}
+
+enum PositionDirection {
+  long
+  short
+}
+
+model User {
+  id           Int      @id @default(autoincrement())
+  email        String   @unique
+  passwordHash String
+  createdAt    DateTime @default(now())
+  funds        Fund[]
+}
+
+model Room {
+  id         Int              @id @default(autoincrement())
+  code       String           @unique
+  createdAt  DateTime         @default(now())
+  status     RoomStatus       @default(active)
+  maxPlayers Int              @default(4)
+  funds      Fund[]
+  ticks      MarketTick[]
+  events     MarketEventLog[]
+  decisions  RivalDecisionLog[]
+  liquidations LiquidationLog[]
+}
+
+model Fund {
+  id              Int        @id @default(autoincrement())
+  roomId          Int
+  room            Room       @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  // null userId = the rival/AI fund (one per room)
+  userId          Int?
+  user            User?      @relation(fields: [userId], references: [id])
+  name            String
+  cash            Float
+  startingCapital Float
+  createdAt       DateTime   @default(now())
+  // Wall-clock of the fund owner's last /state poll. Drives the
+  // "while you were away" re-engagement summary on rejoin — null means
+  // the owner has never polled (brand-new fund).
+  lastSeenAt      DateTime?
+  // Set server-authoritatively by the world tick loop when checkLiquidation
+  // flags the fund. A player closing their tab cannot dodge this — it is
+  // evaluated and persisted entirely on the server.
+  liquidated      Boolean    @default(false)
+  // All-time high NAV. Updated whenever the fund's NAV exceeds this value
+  // (trade fills, market moves). Drives the result-card "peak NAV" stat.
+  peakNav         Float      @default(0)
+  positions       Position[]
+  decisions       RivalDecisionLog[]
+  liquidations    LiquidationLog[]
+
+  @@unique([roomId, userId])
+}
+
+model Position {
+  id             Int               @id @default(autoincrement())
+  fundId         Int
+  fund           Fund              @relation(fields: [fundId], references: [id], onDelete: Cascade)
+  ticker         String
+  direction      PositionDirection
+  quantity       Float
+  entryPrice     Float
+  entryTimestamp DateTime
+  closedAt       DateTime?
+  exitPrice      Float?
+
+  @@index([fundId, closedAt])
+}
+
+model MarketTick {
+  id           Int      @id @default(autoincrement())
+  roomId       Int
+  room         Room     @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  timestamp    DateTime @default(now())
+  snapshotJson String
+
+  @@index([roomId, timestamp])
+}
+
+model MarketEventLog {
+  id                 Int      @id @default(autoincrement())
+  roomId             Int
+  room               Room     @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  timestamp          DateTime @default(now())
+  type               String
+  ticker             String?
+  headline           String
+  priceImpactPercent Float
+  // Engine tick unit at which the event fired — lets the client render the
+  // same relative timeline the local Phase-2 simulation had, instead of
+  // wall-clock times (events are cosmetic in the news feed).
+  tickCountAt        Int?
+
+  @@index([roomId, timestamp])
+}
+
+model RivalDecisionLog {
+  id        Int      @id @default(autoincrement())
+  roomId    Int
+  room      Room     @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  fundId    Int
+  fund      Fund     @relation(fields: [fundId], references: [id], onDelete: Cascade)
+  timestamp DateTime @default(now())
+  action    String
+  ticker    String?
+  reasoning String
+  // Execution telemetry + display fields the client UI needs. fillPrice /
+  // realizedPnL are written ONLY when the decision actually filled (a rejected
+  // trade logs the decision but no telemetry), which is what lets the client's
+  // confrontation detector know a moment really happened. confidence is the
+  // brain's stated conviction (0..1). tickCountAt is the engine tick unit.
+  confidence Float?
+  fillPrice  Float?
+  realizedPnL Float?
+  tickCountAt Int?
+
+  @@index([roomId, timestamp])
+}
+
+/**
+ * A record of a fund being force-liquidated by the server. Written once per
+ * liquidation event by the world tick loop — the definitive "this fund died
+ * here, for this reason" fact that the result-card endpoint and the terminal
+ * cause-of-death line both read from.
+ *
+ * `rivalContext` captures what the rival fund was doing at the moment of
+ * liquidation (e.g. "liquidated shortly after APEX CAPITAL went short NOVA").
+ * Null when the liquidation was purely the player's own leverage with no rival
+ * entanglement.
+ */
+model LiquidationLog {
+  id          Int      @id @default(autoincrement())
+  roomId      Int
+  room        Room     @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  fundId      Int
+  fund        Fund     @relation(fields: [fundId], references: [id], onDelete: Cascade)
+  timestamp   DateTime @default(now())
+  startingCapital Float
+  peakNav     Float
+  finalNav    Float
+  cause       String
+  rivalContext String?
+  tickCountAt Int
+  durationTicks Int
+
+  @@index([fundId])
+  @@index([roomId, timestamp])
+}
