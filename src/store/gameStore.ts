@@ -1,173 +1,452 @@
+/**
+ * Black Sheep — server-driven Zustand store.
+ */
 import { create } from 'zustand';
-import { tickMarket, createInitialMarket, applyEvent, mulberry32 } from '../engine/market';
-import { generateEvent, maybeFireScriptedEvent, initialScheduler } from '../engine/events';
-import type { SchedulerState } from '../engine/events';
-import { createFund, openPosition as engOpen, closePosition as engClose, markToMarket, getExposure, checkLiquidation, availableCash, positionPnl, liquidateFund, deriveCauseOfDeath, peakNav } from '../engine/portfolio';
-import type { Company, MarketEvent, Ticker } from '../engine/types';
-import type { Fund } from '../engine/portfolio';
-export const STARTING_CAPITAL = 10_000_000;
-export const RIVAL_NAME = 'APEX CAPITAL';
-const CAP = 160;
-export type RiskLabel = 'LOW' | 'MODERATE' | 'HIGH' | 'CRITICAL';
-export interface GameStore {
-  companies: Record<Ticker, Company>; tickCount: number; timestamp: number;
-  fund: Fund; events: MarketEvent[]; priceHistory: Record<Ticker, number[]>;
-  navHistory: number[]; rivalNav: number; rivalHistory: number[]; selectedTicker: Ticker;
-  nav: number; cash: number; availCash: number; unrealizedPnL: number;
-  dailyPnl: number; dailyPnlPct: number; grossExposure: number; netExposure: number;
-  leverage: number; marginUsedPercent: number; atRisk: boolean;
-  riskPct: number; riskLabel: RiskLabel; cashPct: number; liquidationAt: number;
-  liquidated: boolean; causeOfDeath: string; peakNav: number;
-  scheduler: SchedulerState;
-  tick: () => void; buy: (t: Ticker, d: number, l?: number) => void;
-  short: (t: Ticker, d: number, l?: number) => void; closePosition: (id: string) => void;
-  selectTicker: (t: Ticker) => void;
+import { createFund, openPosition, closePosition, peakNav } from '@black-sheep/engine/portfolio';
+import type { Fund } from '@black-sheep/engine/portfolio';
+import { derive } from './derive';
+import type { RiskLabel } from './derive';
+import type { Ticker, Company, MarketEvent } from '@black-sheep/engine/types';
+import type { ConfrontationEvent } from '@black-sheep/engine/rival';
+import type { RivalFund } from '@black-sheep/engine/rival';
+import { apiFetch } from './api';
+import { projectState } from './stateMapper';
+import type { ProjectionPrev } from './stateMapper';
+
+export type Phase = 'auth' | 'lobby' | 'trading';
+
+export interface GameSession {
+  token: string;
+  user: { id: number; email: string };
+  roomCode: string;
+  /** ms epoch of the last /state poll — drives the away-summary on rejoin. */
+  lastSeenAt: number;
+}
+
+export interface GameStoreState {
+  phase: Phase;
+  token: string;
+  user: { id: number; email: string } | null;
+  roomCode: string;
+  error: string;
+  /** The caller's fund DB id (from /state me.fundId). Null before first poll. */
+  fundId: number | null;
+  /** The caller's fund display name (from /state me.name). */
+  name: string;
+  companies: Record<Ticker, Company>;
+  tickCount: number;
+  timestamp: number;
+  fund: Fund;
+  nav: number;
+  cash: number;
+  availCash: number;
+  unrealizedPnL: number;
+  dailyPnl: number;
+  dailyPnlPct: number;
+  grossExposure: number;
+  netExposure: number;
+  leverage: number;
+  marginUsedPercent: number;
+  atRisk: boolean;
+  riskPct: number;
+  riskLabel: RiskLabel;
+  liquidationAt: number;
+  cashPct: number;
+  peakNav: number;
+  rivalFund: RivalFund;
+  rivalNav: number;
+  rivalThinking: boolean;
+  events: MarketEvent[];
+  flow: Record<Ticker, number>;
+  confrontation: ConfrontationEvent | null;
+  contested: Ticker[];
+  rivalDecisionKey: string;
+  awaySummary: unknown | null;
+  /** ms epoch of the last /state poll — drives the away-summary fetch on rejoin. */
+  lastSeenAt: number;
+  liquidated: boolean;
+  causeOfDeath: string;
+  /** Server-computed cause from the latest LiquidationLog (null when alive). */
+  liquidationCause: string | null;
+  /** Rival context line from the latest LiquidationLog (null when irrelevant). */
+  liquidationRivalContext: string | null;
+  priceHistory: Record<Ticker, number[]>;
+  navHistory: number[];
+  rivalHistory: number[];
+  selectedTicker: Ticker;
+  // --- session / room actions ---
+  login: (email: string, password: string) => Promise<void>;
+  logout: () => void;
+  register: (email: string, password: string) => Promise<void>;
+  clearError: () => void;
+  createRoom: () => Promise<void>;
+  joinRoom: (code: string) => Promise<void>;
+  enterRoom: (roomCode: string) => void;
+  leaveRoom: () => void;
   restart: () => void;
+  setError: (error: string) => void;
+  // --- trading / UI actions ---
+  selectTicker: (ticker: Ticker) => void;
+  buy: (ticker: Ticker, dollarAmount: number, leverage?: number) => void;
+  short: (ticker: Ticker, dollarAmount: number, leverage?: number) => void;
+  closePosition: (id: string) => void;
+  dismissConfrontation: () => void;
+  // --- poll / away ---
+  poll: () => Promise<void>;
+  fetchAwaySummary: (roomCode: string) => Promise<void>;
+  dismissAwaySummary: () => void;
 }
-export function clampN(n: number, lo: number, hi: number) { return Math.min(hi, Math.max(lo, n)); }
-function seedEvents(): MarketEvent[] {
-  return [
-    { id: 's1', type: 'company', ticker: 'NOVA', headline: 'NOVA AI announces new model', priceImpactPercent: 3.1, timestamp: -8 },
-    { id: 's2', type: 'company', ticker: 'TITAN', headline: 'TITAN MOTORS faces regulatory review', priceImpactPercent: -2.2, timestamp: -12 },
-    { id: 's3', type: 'company', ticker: 'APXB', headline: 'APEX BANK beats Q3 results', priceImpactPercent: 1.8, timestamp: -15 },
-    { id: 's4', type: 'company', ticker: 'HELX', headline: 'HELIX SYSTEMS CFO to step down', priceImpactPercent: -1.4, timestamp: -19 },
-  ];
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+const STORAGE_KEY = 'black_sheep_session';
+
+function loadSession(): GameSession | null {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<GameSession>;
+    if (!parsed.token || !parsed.user || !parsed.roomCode) return null;
+    return {
+      token: parsed.token,
+      user: parsed.user,
+      roomCode: parsed.roomCode,
+      lastSeenAt: typeof parsed.lastSeenAt === 'number' ? parsed.lastSeenAt : Date.now(),
+    };
+  } catch {
+    return null;
+  }
 }
-export function derive(market: { companies: Record<Ticker, Company> }, fund: Fund) {
-  const mkt = market as Parameters<typeof markToMarket>[1];
-  const r = markToMarket(fund, mkt);
-  const e = getExposure(fund, mkt);
-  const liq = checkLiquidation(fund, mkt);
-  const avail = availableCash(fund);
-  const leverage = r.nav > 0 ? e.grossExposure / r.nav : 0;
-  let shortGross = 0;
-  for (const p of fund.positions) { if (p.direction === 'short') shortGross += Math.abs((mkt.companies[p.ticker]?.price ?? 0) * p.quantity); }
-  const shortShare = e.grossExposure > 0 ? shortGross / e.grossExposure : 0;
-  const marginTerm = Number.isFinite(liq.marginUsedPercent) ? clampN(liq.marginUsedPercent, 0, 100) * 0.25 : 25;
-  const riskPct = fund.positions.length === 0 ? 0 : clampN((e.grossExposure / Math.max(r.nav, 1)) * 55 + marginTerm + shortShare * 10, 0, 100);
-  const riskLabel: RiskLabel = riskPct < 25 ? 'LOW' : riskPct < 55 ? 'MODERATE' : riskPct < 80 ? 'HIGH' : 'CRITICAL';
-  let tma = 0; let tmm = 0;
-  for (const p of fund.positions) { if (p.direction !== 'short') continue; const px = mkt.companies[p.ticker]?.price ?? 0; tma += p.marginReserved + positionPnl(p, px); tmm += 0.25 * px * p.quantity; }
-  const hasShort = fund.positions.some((pp) => pp.direction === 'short');
-  const liqAt = hasShort ? Math.max(0, r.nav - Math.max(tma - tmm, 0)) : Math.max(0, r.nav * 0.25);
-  const pnl = r.nav - STARTING_CAPITAL;
-  const pct = (pnl / STARTING_CAPITAL) * 100;
-  const mUp = Number.isFinite(liq.marginUsedPercent) ? clampN(liq.marginUsedPercent, 0, 999) : 0;
-  const cPct = r.nav > 0 ? (fund.cash / r.nav) * 100 : 0;
-  return { nav: r.nav, unrealizedPnL: r.unrealizedPnL, grossExposure: e.grossExposure, netExposure: e.netExposure, leverage: leverage, marginUsedPercent: mUp, atRisk: liq.atRisk, riskPct: riskPct, riskLabel: riskLabel, liquidationAt: liqAt, cashPct: cPct, dailyPnl: pnl, dailyPnlPct: pct, availCash: avail, cash: fund.cash };
+
+function saveSession(session: GameSession): void {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(session));
 }
-function initAll() {
-  const m = createInitialMarket();
-  const fund = createFund(STARTING_CAPITAL, 0);
-  const ph: Record<Ticker, number[]> = {};
-  for (const t of Object.keys(m.companies)) ph[t] = [m.companies[t].price];
-  return { m: m, fund: fund, ph: ph };
+
+function clearSession(): void {
+  localStorage.removeItem(STORAGE_KEY);
 }
-const _i = initAll();
-const _d = derive(_i.m, _i.fund);
-function applyDerived(set: (p: Partial<GameStore>) => void, s: GameStore, nf: Fund) {
-  const d = derive({ companies: s.companies }, nf);
-  const hf = { ...nf, history: [...nf.history, { timestamp: s.timestamp, nav: d.nav }] };
-  set({
-    companies: s.companies,
-    fund: hf,
-    nav: d.nav,
-    cash: d.cash,
-    availCash: d.availCash,
-    unrealizedPnL: d.unrealizedPnL,
-    dailyPnl: d.dailyPnl,
-    dailyPnlPct: d.dailyPnlPct,
-    grossExposure: d.grossExposure,
-    netExposure: d.netExposure,
-    leverage: d.leverage,
-    marginUsedPercent: d.marginUsedPercent,
-    atRisk: d.atRisk,
-    riskPct: d.riskPct,
-    riskLabel: d.riskLabel,
-    cashPct: d.cashPct,
-    liquidationAt: d.liquidationAt,
-    peakNav: peakNav(hf),
-  });
+
+function seedMarket(): Record<Ticker, Company> {
+  return {
+    NOVA: { ticker: 'NOVA', name: 'NOVA AI', sector: 'tech', price: 142.31, previousClose: 142.31, volatility: 0.035, beta: 1.3, rateSensitivity: 0.8, liquidity: 150_000_000 },
+    TITAN: { ticker: 'TITAN', name: 'TITAN MOTORS', sector: 'auto', price: 87.12, previousClose: 87.12, volatility: 0.02, beta: 1.0, rateSensitivity: 0.7, liquidity: 200_000_000 },
+    ORBL: { ticker: 'ORBL', name: 'ORBITAL DYNAMICS', sector: 'space', price: 203.44, previousClose: 203.44, volatility: 0.04, beta: 1.4, rateSensitivity: 0.6, liquidity: 80_000_000 },
+    HELX: { ticker: 'HELX', name: 'HELIX SYSTEMS', sector: 'biotech', price: 61.28, previousClose: 61.28, volatility: 0.06, beta: 1.6, rateSensitivity: 0.5, liquidity: 40_000_000 },
+    APXB: { ticker: 'APXB', name: 'APEX BANK', sector: 'finance', price: 34.9, previousClose: 34.9, volatility: 0.008, beta: 0.7, rateSensitivity: 1.6, liquidity: 1_200_000_000 },
+    PULSE: { ticker: 'PULSE', name: 'PULSE', sector: 'consumer', price: 118.27, previousClose: 118.27, volatility: 0.006, beta: 0.5, rateSensitivity: 0.4, liquidity: 800_000_000 },
+  };
 }
-export const useGameStore = create<GameStore>()((set, get) => ({
-  companies: _i.m.companies, tickCount: 0, timestamp: 0, fund: _i.fund,
-  events: seedEvents(), priceHistory: _i.ph, navHistory: [STARTING_CAPITAL],
-  rivalNav: STARTING_CAPITAL, rivalHistory: [STARTING_CAPITAL], selectedTicker: 'NOVA',
-  scheduler: initialScheduler(15),
-  nav: _d.nav, cash: _d.cash, availCash: _d.availCash, unrealizedPnL: _d.unrealizedPnL,
-  dailyPnl: _d.dailyPnl, dailyPnlPct: _d.dailyPnlPct, grossExposure: _d.grossExposure,
-  netExposure: _d.netExposure, leverage: _d.leverage, marginUsedPercent: _d.marginUsedPercent,
-  atRisk: _d.atRisk, riskPct: _d.riskPct, riskLabel: _d.riskLabel, cashPct: _d.cashPct,
-  liquidationAt: _d.liquidationAt,
-  liquidated: false, causeOfDeath: '', peakNav: STARTING_CAPITAL,
-  tick: () => {
-    const s = get();
-    if (s.liquidated) return;
-    const prev = { companies: s.companies, tickCount: s.tickCount, timestamp: s.timestamp };
-    let next = tickMarket(prev);
-    const rng = mulberry32((0x51ab ^ Math.imul(next.tickCount + 1, 0x85ebca6b)) >>> 0);
-    const scripted = maybeFireScriptedEvent(next, s.scheduler, rng);
-    let evt: MarketEvent | null = null;
-    if (scripted.event) {
-      evt = scripted.event;
-      next = applyEvent(next, evt) as typeof next;
-    } else {
-      evt = generateEvent(next, rng);
-      if (evt) next = applyEvent(next, evt) as typeof next;
-    }
-    const rr = mulberry32((0x77aa ^ Math.imul(next.tickCount + 1, 0x27d4eb2f)) >>> 0);
-    const rivalNav = Math.max(1, s.rivalNav * (1 + (rr() - 0.52) * 0.012));
-    const d = derive(next, s.fund);
-    const fundWithHistory = { ...s.fund, history: [...s.fund.history, { timestamp: next.timestamp, nav: d.nav }] };
-    const ph: Record<Ticker, number[]> = { ...s.priceHistory };
-    for (const t of Object.keys(next.companies)) { const a = [...(ph[t] ?? []), next.companies[t].price]; ph[t] = a.length > CAP ? a.slice(a.length - CAP) : a; }
-    if (d.atRisk) {
-      const closedFund = liquidateFund(fundWithHistory, next);
-      const ld = derive(next, closedFund);
-      set({ companies: next.companies, tickCount: next.tickCount, timestamp: next.timestamp, scheduler: scripted.next, rivalNav: rivalNav, rivalHistory: [...s.rivalHistory, rivalNav].slice(-CAP), navHistory: [...s.navHistory, ld.nav].slice(-CAP), priceHistory: ph, events: evt ? [evt, ...s.events].slice(0, 60) : s.events, nav: ld.nav, cash: ld.cash, availCash: ld.availCash, unrealizedPnL: ld.unrealizedPnL, dailyPnl: ld.dailyPnl, dailyPnlPct: ld.dailyPnlPct, grossExposure: ld.grossExposure, netExposure: ld.netExposure, leverage: ld.leverage, marginUsedPercent: ld.marginUsedPercent, atRisk: ld.atRisk, riskPct: ld.riskPct, riskLabel: ld.riskLabel, cashPct: ld.cashPct, liquidationAt: ld.liquidationAt, fund: closedFund, liquidated: true, causeOfDeath: deriveCauseOfDeath(fundWithHistory, next), peakNav: peakNav(fundWithHistory) });
-      return;
-    }
-    set({ companies: next.companies, tickCount: next.tickCount, timestamp: next.timestamp, scheduler: scripted.next, rivalNav: rivalNav, rivalHistory: [...s.rivalHistory, rivalNav].slice(-CAP), navHistory: [...s.navHistory, d.nav].slice(-CAP), priceHistory: ph, events: evt ? [evt, ...s.events].slice(0, 60) : s.events, nav: d.nav, cash: d.cash, availCash: d.availCash, unrealizedPnL: d.unrealizedPnL, dailyPnl: d.dailyPnl, dailyPnlPct: d.dailyPnlPct, grossExposure: d.grossExposure, netExposure: d.netExposure, leverage: d.leverage, marginUsedPercent: d.marginUsedPercent, atRisk: d.atRisk, riskPct: d.riskPct, riskLabel: d.riskLabel, cashPct: d.cashPct, liquidationAt: d.liquidationAt, fund: fundWithHistory, liquidated: false, causeOfDeath: '', peakNav: peakNav(fundWithHistory) });
+
+const SEED_FUND = createFund(10_000_000, 0);
+
+// ---------------------------------------------------------------------------
+// Store
+// ---------------------------------------------------------------------------
+
+const _initSession = loadSession();
+const _initPhase: Phase = _initSession ? 'lobby' : 'auth';
+const _initCompanies = seedMarket();
+const _initFund = SEED_FUND;
+const _initAwaySummary = null;
+
+export const useGameStore = create<GameStoreState>((set, get) => ({
+  phase: _initPhase,
+  token: _initSession ? _initSession.token : '',
+  user: _initSession ? _initSession.user : null,
+  roomCode: _initSession ? _initSession.roomCode : '',
+  error: '',
+  fundId: null,
+  name: '',
+  companies: _initCompanies as Record<Ticker, Company>,
+  tickCount: 0,
+  timestamp: 0,
+  fund: _initFund,
+  nav: 10_000_000,
+  cash: 10_000_000,
+  availCash: 10_000_000,
+  unrealizedPnL: 0,
+  dailyPnl: 0,
+  dailyPnlPct: 0,
+  grossExposure: 0,
+  netExposure: 0,
+  leverage: 0,
+  marginUsedPercent: 0,
+  atRisk: false,
+  riskPct: 0,
+  riskLabel: 'LOW',
+  liquidationAt: 0,
+  cashPct: 100,
+  peakNav: 10_000_000,
+  rivalFund: { ...SEED_FUND, personality: 'contrarian' as const, lastDecision: null },
+  rivalNav: 10_000_000,
+  rivalThinking: false,
+  events: [],
+  flow: {},
+  confrontation: null,
+  contested: [],
+  rivalDecisionKey: '',
+  awaySummary: _initAwaySummary ?? null,
+  lastSeenAt: _initSession ? _initSession.lastSeenAt : Date.now(),
+  liquidated: false,
+  causeOfDeath: '',
+  liquidationCause: null,
+  liquidationRivalContext: null,
+  priceHistory: {},
+  navHistory: [],
+  rivalHistory: [],
+  selectedTicker: 'NOVA' as Ticker,
+  // ---------------------------------------------------------------------------
+  // Actions
+  // ---------------------------------------------------------------------------
+
+  login: async (email: string, password: string) => {
+    const data = await apiFetch<{ token: string; user: { id: number; email: string } }>('/auth/login', {
+      method: 'POST',
+      body: { email: email.trim(), password },
+    });
+    const session: GameSession = { token: data.token, user: data.user, roomCode: '', lastSeenAt: Date.now() };
+    saveSession(session);
+    set({ phase: 'lobby', token: data.token, user: data.user, roomCode: '', error: '' });
   },
-  buy: (ticker, dollarAmount, leverage) => {
-    const s = get();
-    const price = s.companies[ticker]?.price;
-    if (!price || price <= 0) return;
-    const lv = Math.max(1, Math.floor(leverage ?? 1));
-    const notional = Math.floor(dollarAmount) * lv;
-    if (notional <= 0) return;
-    const nf = engOpen(s.fund, ticker, 'long', notional, price);
-    if (nf === s.fund) return;
-    applyDerived(set, s, nf);
+  register: async (email: string, password: string) => {
+    const data = await apiFetch<{ token: string; user: { id: number; email: string } }>('/auth/register', {
+      method: 'POST',
+      body: { email: email.trim(), password },
+    });
+    const session: GameSession = { token: data.token, user: data.user, roomCode: '', lastSeenAt: Date.now() };
+    saveSession(session);
+    set({ phase: 'lobby', token: data.token, user: data.user, roomCode: '', error: '' });
   },
-  short: (ticker, dollarAmount, leverage) => {
-    const s = get();
-    const price = s.companies[ticker]?.price;
-    if (!price || price <= 0) return;
-    const lv = Math.max(1, Math.floor(leverage ?? 1));
-    const notional = Math.floor(dollarAmount) * lv;
-    if (notional <= 0) return;
-    const nf = engOpen(s.fund, ticker, 'short', notional, price);
-    if (nf === s.fund) return;
-    applyDerived(set, s, nf);
+  createRoom: async () => {
+    const { token } = get();
+    const data = await apiFetch<{ code: string }>('/rooms', { method: 'POST', token });
+    get().enterRoom(data.code);
   },
-  closePosition: (id) => {
-    const s = get();
-    const pos = s.fund.positions.find((pp) => pp.id === id);
-    if (!pos) return;
-    const price = s.companies[pos.ticker]?.price;
-    if (!price || price <= 0) return;
-    const nf = engClose(s.fund, id, price);
-    if (nf === s.fund) return;
-    applyDerived(set, s, nf);
+  joinRoom: async (code: string) => {
+    const { token } = get();
+    await apiFetch(`/rooms/${code}/join`, { method: 'POST', token });
+    get().enterRoom(code);
   },
-  selectTicker: (t) => set({ selectedTicker: t }),
+  logout: () => {
+    clearSession();
+    set({
+      phase: 'auth',
+      token: '',
+      user: null,
+      roomCode: '',
+      error: '',
+      fund: SEED_FUND,
+      awaySummary: null,
+      confrontation: null,
+      contested: [],
+      liquidated: false,
+    });
+  },
+  enterRoom: (roomCode: string) => {
+    set({ phase: 'trading', roomCode, error: '' });
+    // Fire the away-summary fetch after entering — non-blocking. The screen
+    // shows only when the window was long AND something notable happened.
+    void get().fetchAwaySummary(roomCode);
+  },
+  leaveRoom: () => {
+    set({ phase: 'lobby', roomCode: '', awaySummary: null, confrontation: null, contested: [], liquidated: false });
+  },
   restart: () => {
-    const nm = createInitialMarket();
-    const nf = createFund(STARTING_CAPITAL, 0);
-    const nd = derive(nm, nf);
-    const nph: Record<Ticker, number[]> = {};
-    for (const t of Object.keys(nm.companies)) nph[t] = [nm.companies[t].price];
-    set({ companies: nm.companies, tickCount: 0, timestamp: 0, fund: nf, events: seedEvents(), priceHistory: nph, navHistory: [STARTING_CAPITAL], rivalNav: STARTING_CAPITAL, rivalHistory: [STARTING_CAPITAL], selectedTicker: 'NOVA', scheduler: initialScheduler(15), nav: nd.nav, cash: nd.cash, availCash: nd.availCash, unrealizedPnL: nd.unrealizedPnL, dailyPnl: nd.dailyPnl, dailyPnlPct: nd.dailyPnlPct, grossExposure: nd.grossExposure, netExposure: nd.netExposure, leverage: nd.leverage, marginUsedPercent: nd.marginUsedPercent, atRisk: nd.atRisk, riskPct: nd.riskPct, riskLabel: nd.riskLabel, cashPct: nd.cashPct, liquidationAt: nd.liquidationAt, liquidated: false, causeOfDeath: '', peakNav: STARTING_CAPITAL });
+    clearSession();
+    set({
+      phase: 'auth',
+      token: '',
+      user: null,
+      roomCode: '',
+      error: '',
+      companies: seedMarket(),
+      fund: SEED_FUND,
+      awaySummary: null,
+      confrontation: null,
+      contested: [],
+      liquidated: false,
+      priceHistory: {},
+      navHistory: [],
+      rivalHistory: [],
+    });
+  },
+  fetchAwaySummary: async (roomCode: string) => {
+    const { token, lastSeenAt } = get();
+    if (!token) return;
+    try {
+      const since = lastSeenAt > 0 ? lastSeenAt : Date.now();
+      const res = await apiFetch<{ notable: boolean } & Record<string, unknown>>(
+        `/rooms/${roomCode}/away-summary?since=${since}`,
+        { token },
+      );
+      // Only store the summary if it passes the notable gate — otherwise the
+      // screen would show on every refresh and train players to dismiss it.
+      if (res.notable) {
+        set({ awaySummary: res });
+      }
+    } catch {
+      // Away summary is best-effort — never break the rejoin over it.
+    }
+  },
+  dismissAwaySummary: () => set({ awaySummary: null }),
+  setError: (error: string) => set({ error }),
+  clearError: () => set({ error: '' }),
+  dismissConfrontation: () => set({ confrontation: null }),
+  selectTicker: (ticker: Ticker) => set({ selectedTicker: ticker }),
+  buy: (ticker: Ticker, dollarAmount: number, _leverage?: number) => {
+    const { fund, companies } = get();
+    const price = companies[ticker]?.price ?? 0;
+    const updated = openPosition(fund, ticker, 'long', dollarAmount, price);
+    if (updated === fund) return;
+    const next = { ...get(), fund: updated };
+    const d = derive({ companies }, next.fund);
+    set({
+      fund: next.fund,
+      nav: d.nav,
+      cash: d.cash,
+      availCash: d.availCash,
+      unrealizedPnL: d.unrealizedPnL,
+      dailyPnl: d.dailyPnl,
+      dailyPnlPct: d.dailyPnlPct,
+      grossExposure: d.grossExposure,
+      netExposure: d.netExposure,
+      leverage: d.leverage,
+      marginUsedPercent: d.marginUsedPercent,
+      atRisk: d.atRisk,
+      riskPct: d.riskPct,
+      riskLabel: d.riskLabel,
+      liquidationAt: d.liquidationAt,
+      cashPct: d.cashPct,
+      peakNav: peakNav(next.fund),
+    });
+  },
+  short: (ticker: Ticker, dollarAmount: number, _leverage?: number) => {
+    const { fund, companies } = get();
+    const price = companies[ticker]?.price ?? 0;
+    const updated = openPosition(fund, ticker, 'short', dollarAmount, price);
+    if (updated === fund) return;
+    const next = { ...get(), fund: updated };
+    const d = derive({ companies }, next.fund);
+    set({
+      fund: next.fund,
+      nav: d.nav,
+      cash: d.cash,
+      availCash: d.availCash,
+      unrealizedPnL: d.unrealizedPnL,
+      dailyPnl: d.dailyPnl,
+      dailyPnlPct: d.dailyPnlPct,
+      grossExposure: d.grossExposure,
+      netExposure: d.netExposure,
+      leverage: d.leverage,
+      marginUsedPercent: d.marginUsedPercent,
+      atRisk: d.atRisk,
+      riskPct: d.riskPct,
+      riskLabel: d.riskLabel,
+      liquidationAt: d.liquidationAt,
+      cashPct: d.cashPct,
+      peakNav: peakNav(next.fund),
+    });
+  },
+  closePosition: (id: string) => {
+    const { fund, companies } = get();
+    const pos = fund.positions.find((p) => p.id === id);
+    const price = pos ? companies[pos.ticker]?.price ?? 0 : 0;
+    const updated = closePosition(fund, id, price);
+    if (updated === fund) return;
+    const next = { ...get(), fund: updated };
+    const d = derive({ companies }, next.fund);
+    set({
+      fund: next.fund,
+      nav: d.nav,
+      cash: d.cash,
+      availCash: d.availCash,
+      unrealizedPnL: d.unrealizedPnL,
+      dailyPnl: d.dailyPnl,
+      dailyPnlPct: d.dailyPnlPct,
+      grossExposure: d.grossExposure,
+      netExposure: d.netExposure,
+      leverage: d.leverage,
+      marginUsedPercent: d.marginUsedPercent,
+      atRisk: d.atRisk,
+      riskPct: d.riskPct,
+      riskLabel: d.riskLabel,
+      liquidationAt: d.liquidationAt,
+      cashPct: d.cashPct,
+      peakNav: peakNav(next.fund),
+    });
+  },
+  poll: async () => {
+    try {
+      const { phase, token, roomCode, priceHistory, navHistory, rivalHistory, contested, confrontation, rivalDecisionKey } = get();
+      if (phase !== 'trading' || !token || !roomCode) return;
+
+      const raw = await apiFetch<Parameters<typeof projectState>[0]>(
+        `/rooms/${roomCode}/state`,
+        { token },
+      );
+
+      const prev: ProjectionPrev = {
+        priceHistory,
+        navHistory,
+        rivalHistory,
+        contested,
+        confrontation,
+        rivalDecisionKey,
+      };
+      const p = projectState(raw, prev);
+
+      // Stamp lastSeenAt on every successful poll — this is the timestamp the
+      // away-summary endpoint uses as the window start on rejoin.
+      const now = Date.now();
+      const session = loadSession();
+      if (session) {
+        session.lastSeenAt = now;
+        saveSession(session);
+      }
+
+      set({
+        fundId: p.fundId,
+        name: p.name,
+        companies: p.companies,
+        tickCount: p.tickCount,
+        timestamp: p.timestamp,
+        fund: p.fund,
+        nav: p.nav,
+        cash: p.cash,
+        availCash: p.availCash,
+        unrealizedPnL: p.unrealizedPnL,
+        dailyPnl: p.dailyPnl,
+        dailyPnlPct: p.dailyPnlPct,
+        grossExposure: p.grossExposure,
+        netExposure: p.netExposure,
+        leverage: p.leverage,
+        marginUsedPercent: p.marginUsedPercent,
+        atRisk: p.atRisk,
+        riskPct: p.riskPct,
+        riskLabel: p.riskLabel,
+        liquidationAt: p.liquidationAt,
+        peakNav: p.peakNav,
+        liquidated: p.liquidated,
+        causeOfDeath: p.liquidationCause ?? '',
+        liquidationCause: p.liquidationCause,
+        liquidationRivalContext: p.liquidationRivalContext,
+        priceHistory: p.priceHistory,
+        navHistory: p.navHistory,
+        rivalNav: p.rivalNav,
+        rivalHistory: p.rivalHistory,
+        rivalFund: p.rivalFund,
+        rivalThinking: p.rivalThinking,
+        events: p.events,
+        flow: p.flow,
+        confrontation: p.confrontation,
+        contested: p.contested,
+        rivalDecisionKey: p.rivalDecisionKey,
+        lastSeenAt: now,
+      });
+    } catch {
+      // silent — next poll retries
+    }
   },
 }));
