@@ -2,7 +2,7 @@ import { useGameStore } from '../store/gameStore';
 import { fmtMoney } from './fmt';
 import MarketNews from './MarketNews';
 import PositionRow from './PositionRow';
-import type { Position } from '../engine/types';
+import type { Position } from '@black-sheep/engine/types';
 export default function Mid() {
   const positions = useGameStore((s) => s.fund.positions);
   const gross = useGameStore((s) => s.grossExposure);

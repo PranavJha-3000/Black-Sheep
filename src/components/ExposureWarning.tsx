@@ -1,5 +1,5 @@
 import { useGameStore } from "../store/gameStore";
-import type { Position } from "../engine/types";
+import type { Position } from "@black-sheep/engine/types";
 
 function exposurePct(pos: Position, price: number, nav: number): number {
   if (nav <= 0) return 0;

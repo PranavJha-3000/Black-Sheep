@@ -1,4 +1,5 @@
-import { useGameStore, RIVAL_NAME } from '../store/gameStore';
+import { useGameStore } from '../store/gameStore';
+import { RIVAL_NAME } from '@black-sheep/engine/rival';
 import { fmtMoney, fmtPct, sparkPath, cx } from './fmt';
 export default function RivalFund() {
   const rivalNav = useGameStore((s) => s.rivalNav);

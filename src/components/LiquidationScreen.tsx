@@ -1,5 +1,8 @@
+import { useState } from "react";
 import { useGameStore } from "../store/gameStore";
 import { fmtMoney } from "./fmt";
+
+const API_BASE = "http://localhost:3001";
 
 export default function LiquidationScreen() {
   const fund = useGameStore((s) => s.fund);
@@ -7,8 +10,24 @@ export default function LiquidationScreen() {
   const peakNav = useGameStore((s) => s.peakNav);
   const nav = useGameStore((s) => s.nav);
   const restart = useGameStore((s) => s.restart);
+  const liquidationRivalContext = useGameStore((s) => s.liquidationRivalContext);
+  const fundId = useGameStore((s) => s.fundId);
+  const [copied, setCopied] = useState(false);
   const startingCapital = fund.startingCapital;
   const finalNav = nav;
+
+  const cardUrl = `${API_BASE}/funds/${fundId}/result-card`;
+
+  async function handleShare() {
+    if (!fundId) return;
+    try {
+      await navigator.clipboard.writeText(cardUrl);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      setCopied(false);
+    }
+  }
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black">
@@ -26,9 +45,15 @@ export default function LiquidationScreen() {
           <div className="col-span-2 mt-2 border-t border-terminal-border pt-3">
             <div className="text-[10px] uppercase tracking-widest text-terminal-dim">Cause of Death</div>
             <div className="mt-1 text-lg font-bold text-[#ff9800]">{causeOfDeath}</div>
+            {liquidationRivalContext && (
+              <div className="mt-2 text-sm font-bold text-terminal-red">{liquidationRivalContext}</div>
+            )}
           </div>
         </div>
-        <button onClick={restart} className="mt-2 rounded bg-terminal-red px-8 py-3 text-sm font-bold tracking-widest text-white hover:bg-[#ff4444]">START AGAIN</button>
+        <button onClick={handleShare} className="rounded bg-terminal-green px-8 py-3 text-sm font-bold tracking-widest text-black hover:bg-[#00cc33]">
+          {copied ? "COPIED ✓" : "SHARE RESULT"}
+        </button>
+        <button onClick={restart} className="rounded bg-terminal-red px-8 py-3 text-sm font-bold tracking-widest text-white hover:bg-[#ff4444]">START AGAIN</button>
       </div>
     </div>
   );

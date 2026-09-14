@@ -1,12 +1,14 @@
-import type { Position } from '../engine/types';
+import type { Position } from '@black-sheep/engine/types';
 import { useGameStore } from '../store/gameStore';
 import { fmtMoney, fmtSigned, fmtPct, cx } from './fmt';
-import { positionPnl } from '../engine/portfolio';
+import { positionPnl } from '@black-sheep/engine/portfolio';
 interface Props { position: Position; }
 export default function PositionRow({ position }: Props) {
   const price = useGameStore((s) => s.companies[position.ticker]?.price ?? 0);
   const nav = useGameStore((s) => s.nav);
   const close = useGameStore((s) => s.closePosition);
+  // Live fight marker: the rival is directly against this exact position.
+  const contested = useGameStore((s) => s.contested.includes(position.ticker));
   const pnl = positionPnl(position, price);
   const notional = price * position.quantity;
   const pnlPct = position.entryPrice > 0 ? (position.direction === 'long' ? (price - position.entryPrice) / position.entryPrice : (position.entryPrice - price) / position.entryPrice) * 100 : 0;
@@ -17,7 +19,17 @@ export default function PositionRow({ position }: Props) {
   const blocks = Math.round(Math.min(100, risk) / 100 * 7);
   return (
     <tr className={cx('border-b border-terminal-border text-[11px]', rowBg)}>
-      <td className="px-2 py-2 font-bold">{position.ticker}</td>
+      <td className="px-2 py-2 font-bold">
+        {position.ticker}
+        {contested && (
+          <span
+            className="ml-1.5 inline-flex items-center gap-1 rounded border border-terminal-red px-1 text-[9px] font-semibold tracking-wider text-terminal-red animate-pulse"
+            title="APEX CAPITAL is positioned directly against you here"
+          >
+            ⚔ APEX
+          </span>
+        )}
+      </td>
       <td className={cx('px-2 py-2 font-semibold', long ? 'text-terminal-green' : 'text-terminal-red')}>{long ? 'LONG' : 'SHORT'}</td>
       <td className="px-2 py-2">{fmtMoney(notional)}</td>
       <td className="px-2 py-2 text-terminal-dim">${position.entryPrice.toFixed(2)}</td>
