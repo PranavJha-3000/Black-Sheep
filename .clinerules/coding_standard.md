@@ -1,0 +1,6 @@
+Follow docs/ai/ working agreement. Before acting:
+1. Read docs/ai/HANDOVER.md, CONSTRAINTS.md, ARCHITECTURE.md, FLOW.md and docs/BLACK-SHEEP-DESIGN-DOC.md (the target spec).
+2. Output the Session Start Block (model, picking up from, constraints in force, open risks).
+3. Respond with a PLAN ONLY, then STOP: problem restated, files to touch, execution path affected, one alternative considered and rejected, what could break, verification commands. Do not implement until I reply "approved".
+Rules: one logical change only. No new dependencies without asking. No opportunistic refactors or renames; flag them in HANDOVER.md Open Items. Do not edit CONSTRAINTS.md. If the change touches >3 files or data, write a ROLLBACK.md entry BEFORE changing anything. Log non-obvious choices in DECISIONS.md (dated, model-versioned). If code and spec disagree, flag it; don't silently pick one. Spec values marked ▲ are placeholders; put them in config/game.ts, never hardcode.
+After implementing, report exactly: CHANGED / WHY / VERIFY (exact commands + expected output) / NOT VERIFIED.
