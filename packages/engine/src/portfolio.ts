@@ -8,30 +8,15 @@
  */
 
 import type { Direction, MarketState, Position, Ticker } from './types';
+import { INITIAL_MARGIN_RATE, MAINTENANCE_MARGIN_RATE } from '../../../config/game';
 
 // ---------------------------------------------------------------------------
-// Margin constants
+// Margin constants — sourced from config/game.ts (design doc §11).
+// INITIAL_MARGIN_RATE is re-exported so the server can reconstruct engine
+// Positions from persisted rows (the DB does not store marginReserved)
+// without duplicating the constant.
 // ---------------------------------------------------------------------------
-
-/**
- * Initial margin rate for short positions.
- * When you open a short, you must reserve this fraction of the position's
- * notional value as margin. This cash is locked and can't be spent.
- * 50% matches the real-world Reg-T initial margin requirement.
- *
- * Exported so the server can reconstruct engine Positions from persisted rows
- * (the DB does not store marginReserved) without duplicating the constant.
- */
-export const INITIAL_MARGIN_RATE = 0.5;
-
-/**
- * Maintenance margin rate for short positions.
- * The minimum equity that must remain in a short position's margin account,
- * expressed as a fraction of the CURRENT notional value. If the margin
- * account falls below this, the position is flagged for liquidation.
- * 25% is a realistic maintenance margin requirement.
- */
-const MAINTENANCE_MARGIN_RATE = 0.25;
+export { INITIAL_MARGIN_RATE };
 
 // ---------------------------------------------------------------------------
 // Types

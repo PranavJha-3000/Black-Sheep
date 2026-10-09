@@ -1,5 +1,13 @@
 # Rollback
 
+## Centralize tuning params into config/game.ts · 2026-10-09
+Safe commit: uncommitted (working tree).
+Revert with: `git checkout HEAD -- config server packages/engine/src src` — pure constant relocation, no data/schema touched.
+Files touched: `config/game.ts` (new), `packages/engine/src/{market,portfolio,rival,events,away}.ts`, `server/{world,rooms}.ts`, `src/store/{derive,gameStore}.ts`, `src/components/RivalFund.tsx`.
+Non-code changes to undo: `docs/ai/{ROLLBACK,DECISIONS,HANDOVER}.md` entries.
+Re-check after rollback: `npm run typecheck`; `npm test`; `npm run lint`; `npm run build`.
+
+
 ### D-010 · 2026-09-13 · Claude (Cline)
 **Decision:** Phase 4 keeps the Phase-2 component tree byte-identical and swaps only the data layer: the store becomes a session + poll projection (`GET /rooms/:code/state` every ~2.5s), trades go through a new `POST /rooms/:code/trade` route with optimistic local fills reconciled by the next poll, and a new `RivalDecisionLog.{confidence,fillPrice,realizedPnL,tickCountAt}` telemetry trio (server persists, `/state` relays, client maps) preserves confrontation detection across the wire.
 **Context:** The prompt demanded every component keep working "exactly as before" — a plumbing swap, not a redesign — while the missing trade route and the rival-telemetry gap in `/state` had to be closed on the server first.

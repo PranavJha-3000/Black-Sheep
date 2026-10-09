@@ -2,6 +2,7 @@ import type { Position, Ticker } from './types';
 import { positionPnl } from './portfolio';
 import { detectConfrontation } from './rival';
 import type { ConfrontationEvent, RivalLastDecision } from './rival';
+import { AWAY_MIN_MS, AWAY_NAV_NOTABLE_DOLLARS, AWAY_POS_NOTABLE_DOLLARS } from '../../../config/game';
 
 /*
  * Black Sheep - async re-engagement ("while you were away") math.
@@ -70,14 +71,13 @@ export interface AwaySummary {
  * AND something actually happened. A bare refresh (seconds, nothing moved)
  * must never train players to dismiss this screen.
  *
- * Tunables live here, in one place, so the threshold is a one-line change:
- * AWAY_MIN_MS (window floor), NAV_NOTABLE_DOLLARS (NAV moved), POS_NOTABLE
- * (one name moved). A confrontation is notable on its own — that is the
- * highest-leverage moment this feature exists to surface.
+ * Tunables (AWAY_MIN_MS window floor, AWAY_NAV_NOTABLE_DOLLARS NAV moved,
+ * AWAY_POS_NOTABLE_DOLLARS one name moved) live in config/game.ts and are
+ * re-exported here so the client/tests import them from the engine as before.
+ * A confrontation is notable on its own — that is the highest-leverage moment
+ * this feature exists to surface.
  */
-export const AWAY_MIN_MS = 2 * 60 * 1000;
-export const AWAY_NAV_NOTABLE_DOLLARS = 25_000;
-export const AWAY_POS_NOTABLE_DOLLARS = 10_000;
+export { AWAY_MIN_MS, AWAY_NAV_NOTABLE_DOLLARS, AWAY_POS_NOTABLE_DOLLARS };
 
 export function isNotable(summary: AwaySummary): boolean {
   if (summary.awayMs < AWAY_MIN_MS) return false;

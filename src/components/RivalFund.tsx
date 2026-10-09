@@ -1,5 +1,6 @@
 import { useGameStore } from '../store/gameStore';
 import { RIVAL_NAME } from '@black-sheep/engine/rival';
+import { STARTING_CAPITAL } from '../../config/game';
 import { fmtMoney, fmtPct, sparkPath, cx } from './fmt';
 export default function RivalFund() {
   const rivalNav = useGameStore((s) => s.rivalNav);
@@ -7,7 +8,7 @@ export default function RivalFund() {
   const nav = useGameStore((s) => s.nav);
   const diff = nav - rivalNav;
   const ahead = diff >= 0;
-  const rPct = ((rivalNav - 10_000_000) / 10_000_000) * 100;
+  const rPct = ((rivalNav - STARTING_CAPITAL) / STARTING_CAPITAL) * 100;
   const vals = rivalHist.slice(-60);
   return (
     <div className="flex h-full flex-col rounded border border-terminal-border bg-terminal-panel p-3">

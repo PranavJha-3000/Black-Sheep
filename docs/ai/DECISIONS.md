@@ -1,5 +1,13 @@
 # Decisions
 
+### D-014 · 2026-10-09 · Muse Spark (Cline)
+**Decision:** All gameplay tuning constants move to a single dependency-free `config/game.ts` (design doc §11), and the pure engine (`packages/engine/src/{market,portfolio,rival,events,away}.ts`) imports them via a relative path (`../../../config/game`). Re-exports preserve old import sites (`export { INITIAL_MARGIN_RATE }`, `export { RIVAL_DECISION_TICKS }`, `export { AWAY_MIN_MS, ... }`, `export { STARTING_CAPITAL } from '../../config/game'` in derive.ts), so server/client/tests keep compiling unchanged.
+**Context:** Spec-vs-code audit found constants hardcoded across ~10 files with `STARTING_CAPITAL = 10_000_000` duplicated in server, client store, and RivalFund.tsx — drift risk and a direct §11 violation.
+**Reasoning:** One source of truth per value; values moved byte-identical (no behavior change, 84/84 tests pass). Config stays literal-only (no imports, no I/O) so the engine boundary keeps holding — it imports data, never express/prisma/react.
+**Rejected:** Per-package tuning files (`packages/engine/tuning.ts` + `server/tuning.ts`) — perpetuates the split §11 forbids; adding an `@black-sheep/config` workspace package — new dependency/workspace wiring without approval.
+**Tradeoff accepted:** Engine reaches outside its package root via relative path; acceptable because the imported module is dependency-free and the alternative (duplicating values) is the bug being fixed.
+**Revisit if:** A package boundary or bundler config ever enforces strict import zones (then add a path alias or workspace package).
+
 ### D-001 · 2026-09-12 · Claude (Cline)
 **Decision:** Anthropic API key stays server-side; the browser calls same-origin `POST /api/llm`, and a Vite **plugin** (`llmProxyPlugin` in `vite.config.ts`) injects the key and forwards to `api.anthropic.com/v1/messages`.
 **Context:** No backend exists, but bundling `ANTHROPIC_API_KEY` into client JS would leak it to anyone opening DevTools.
@@ -86,5 +94,22 @@
 **Rejected:** Server-side `lastSeenAt` tracking (would require a session table; the client already knows when it last polled). Showing the screen on every rejoin (would train players to ignore it). Reimplementing PnL math server-side (drift risk).
 **Tradeoff accepted:** A clock-skewed or tampered client can widen/narrow the window — acceptable for V1 since `isNotable` is the real protection and the worst case is a slightly misleading "away" summary, not a security issue.
 **Revisit if:** Away-summary integrity matters (move `lastSeenAt` server-side) or the snapshot cadence makes "NAV then" too coarse (currently every 3 ticks ≈ 15s).
+
+### D-012 · 2026-09-13 · Claude (Cline)
+**Decision:** Fund liquidation is server-authoritative and runs inside the world tick loop (`liquidatePlayerFunds` in `server/world.ts`, serialized by `withWorldLock`). When `checkLiquidation` flags a player fund, the server force-closes every open position at the current market price, marks `Fund.liquidated = true`, computes `deriveCauseOfDeath`, derives a rival-context line by replaying the last 6 `RivalDecisionLog` rows through the shared `detectConfrontation`, and writes a `LiquidationLog` — all in one transaction. The client is told via `/state` (`me.liquidated`/`liquidationCause`/`liquidationRivalContext`) and renders `LiquidationScreen`.
+**Context:** Phase 4 kept liquidation client-dormant (`liquidated: false`), which meant a player closing their tab could dodge a margin call — the exact cheat the whole persistent-world design exists to prevent.
+**Reasoning:** The market and rival already move unattended server-side; liquidation is the same class of server-truth event. Reusing `liquidateFund`/`deriveCauseOfDeath`/`checkLiquidation`/`detectConfrontation` means zero duplicated math and the rival-context line is free. Running inside the room lock serializes it against trades/ticks so cash can't be double-spent.
+**Rejected:** Client-triggered liquidation (dodgeable by tab close); a NAV-based liquidation threshold (engine only exposes margin-based `checkLiquidation`; scope creep); a separate liquidation event stream (`LiquidationLog` already mirrors the append-only log pattern of the other tables).
+**Tradeoff accepted:** `peakNav` is maintained by the tick loop + a post-trade hook rather than being reconstructed from history, so the very first tick after fund creation may miss a peak that occurred before the first poll — acceptable for V1 (the peak is a display stat, not accounting truth).
+**Revisit if:** Liquidation must trigger mid-tick (before other funds are evaluated in the same pass) or realized-PnL accounting needs the engine `history` array rather than the scalar `peakNav`.
+
+### D-013 · 2026-09-13 · Claude (Cline)
+**Decision:** Result cards are served by two PUBLIC (unauthenticated) endpoints — `GET /funds/:id/result-card` (JSON) and `GET /funds/:id/result-card.png` (1200×630 PNG rendered via `@vercel/og` `ImageResponse`). The image is built with `React.createElement` objects (no JSX, since the server has no build step for tsx) in the terminal aesthetic (dark bg, mono font, green/red NAV, cause-of-death + rival-context). The SHARE button on both `FundSummaryPanel` (always-accessible sidebar) and `LiquidationScreen` copies the JSON card URL to the clipboard.
+**Context:** The prompt asked for the cheapest legitimate distribution mechanic — real player outcomes, not synthetic virality — shareable at any NAV (a fund up 300% is as shareable as one that blew up).
+**Reasoning:** "The link is the share" — a shareable card must be openable by anyone who sees the URL, so auth would break the whole mechanic. The payload is intentionally aggregate-only (NAV/peak/cause/best-trade) so the information firewall holds even for unauthenticated viewers. `@vercel/og` is purpose-built for OG cards and needs no native Cairo deps (unlike `node-canvas`, which is fragile on Windows); satori's default font keeps it dependency-free, with a TTF-load upgrade path noted.
+**Rejected:** `node-canvas` (native deps, fragile install); authenticated result cards (breaks sharing); exposing positions/cash on the card (violates the firewall the entire multiplayer design rests on).
+**Tradeoff accepted:** fund ids are auto-increment integers, so a card URL is guessable — acceptable for V1 (the data is aggregate-only, and the worst case is viewing another fund's headline stats). If that matters, swap in an opaque share token on the Fund.
+**Revisit if:** Cards must be private (add a share token) or the exact JetBrains Mono face is required (bundle a TTF and pass it via `ImageResponse`'s `fonts` option).
+
 
 

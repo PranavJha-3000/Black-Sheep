@@ -34,6 +34,7 @@ import type {
   Ticker,
 } from '@black-sheep/engine/types';
 import { prisma } from './db';
+import { EVENT_BUFFER, SNAPSHOT_EVERY_TICKS, STARTING_CAPITAL, TICK_INTERVAL_MS } from '../config/game';
 
 /**
  * The persistent game world.
@@ -44,13 +45,8 @@ import { prisma } from './db';
  * tick → persist periodic snapshot → rival decides → persist deltas.
  */
 
-// Engine starting capital lives client-side (gameStore) today; the server
-// needs the same number to seed funds. A config constant, not engine logic.
-const STARTING_CAPITAL = 10_000_000;
-const TICK_MS = 5_000;
-/** Full market snapshots every N engine ticks (periodic, NOT every tick). */
-const SNAPSHOT_EVERY_TICKS = 3;
-const EVENT_BUFFER = 60;
+// Starting capital, tick interval, snapshot cadence, and the event buffer come
+// from config/game.ts (design doc §11) — no engine-logic tuning constants live here.
 const RNG_SEED_SALT = 0x9e3779b9;
 
 const ANTHROPIC_URL = 'https://api.anthropic.com/v1/messages';
@@ -217,7 +213,7 @@ export async function ensureWorld(roomId: number): Promise<World> {
     scheduler = snap.scheduler;
   } else {
     market = createInitialMarket();
-    scheduler = initialScheduler(15);
+    scheduler = initialScheduler();
   }
 
   const eventRows = await prisma.marketEventLog.findMany({
@@ -564,8 +560,8 @@ async function tickAllActiveRooms(): Promise<void> {
 export function startWorldLoop(): () => void {
   const timer = setInterval(() => {
     void tickAllActiveRooms();
-  }, TICK_MS);
-  console.log(`[world] clock started - ticking every ${TICK_MS}ms`);
+  }, TICK_INTERVAL_MS);
+  console.log(`[world] clock started - ticking every ${TICK_INTERVAL_MS}ms`);
   return () => clearInterval(timer);
 }
 

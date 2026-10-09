@@ -15,6 +15,7 @@ import { openPosition, closePosition, availableCash, positionPnl } from './portf
 import { getNetFlow } from './market';
 import type { Fund } from './portfolio';
 import type { Direction, MarketEvent, MarketState, Position, Sector, Ticker } from './types';
+import { CROWD_FRAC, CROWD_MIN_DOLLARS, RIVAL_DECISION_TICKS } from '../../../config/game';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -88,17 +89,14 @@ export interface RivalDecisionInput {
 }
 
 // ---------------------------------------------------------------------------
-// Constants
+// Constants — tuning values sourced from config/game.ts (design doc §11).
+// RIVAL_DECISION_TICKS is re-exported so the server tick gate and tests keep
+// importing it from here.
 // ---------------------------------------------------------------------------
+export { RIVAL_DECISION_TICKS };
 
-/** Rival reconsiders its book every N ticks. */
-export const RIVAL_DECISION_TICKS = 10;
 /** getNetFlow lookback window (ticks). */
 const FLOW_LOOKBACK = 15;
-/** A trade is "crowded" when |netFlow|/liquidity exceeds this. */
-const CROWD_FRAC = 0.02;
-/** ...and the absolute flow exceeds this many dollars. */
-const CROWD_MIN_DOLLARS = 500_000;
 
 /** Display name of the rival fund. Lives here (not the store) so engine-side
  *  headline strings can use it; the store re-exports it for the UI. */

@@ -1,4 +1,5 @@
 import type { MarketEvent, MarketState } from './types';
+import { EVENT_AMBIENT_CHANCE, EVENT_FIRE_DELAY_JITTER, EVENT_FIRE_DELAY_MIN, EVENT_FIRST_FIRE_TICK } from '../../../config/game';
 export interface ScriptedTemplate { id: string; kind: string; weight: number; }
 export const SCRIPTED_TEMPLATES: ScriptedTemplate[] = [
   { id: 'nova-breakthrough', kind: 'company', weight: 3 },
@@ -9,11 +10,11 @@ export const SCRIPTED_TEMPLATES: ScriptedTemplate[] = [
   { id: 'helix-trial', kind: 'company', weight: 2 },
 ];
 export interface SchedulerState { nextFireTick: number; lastTicker: string | null; }
-export function initialScheduler(nextFireTick = 15): SchedulerState {
+export function initialScheduler(nextFireTick: number = EVENT_FIRST_FIRE_TICK): SchedulerState {
   return { nextFireTick: nextFireTick, lastTicker: null };
 }
 export function nextFireDelay(rng: () => number): number {
-  return 15 + Math.floor(rng() * 6);
+  return EVENT_FIRE_DELAY_MIN + Math.floor(rng() * EVENT_FIRE_DELAY_JITTER);
 }
 function range(rng: () => number, lo: number, hi: number): number {
   return lo + rng() * (hi - lo);
@@ -71,7 +72,7 @@ export function maybeFireScriptedEvent(state: MarketState, sched: SchedulerState
 const POS = ['announces new model with 2x performance gains', 'beats Q3 results', 'wins $2.1B government contract', 'app reaches 100M MAU milestone', 'raises full-year guidance', 'signs major partnership'];
 const NEG = ['faces regulatory review', 'CFO to step down next quarter', 'cuts guidance on supply pressure', 'misses revenue estimates', 'downgraded on valuation', 'halts production after incident'];
 export function generateEvent(state: MarketState, rng: () => number): MarketEvent | null {
-  if (rng() > 0.14) return null;
+  if (rng() > EVENT_AMBIENT_CHANCE) return null;
   const tickers = Object.keys(state.companies);
   if (tickers.length === 0) return null;
   const ticker = tickers[Math.floor(rng() * tickers.length)];

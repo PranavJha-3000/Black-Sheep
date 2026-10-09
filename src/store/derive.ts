@@ -9,7 +9,7 @@ import type { Company, Ticker } from '@black-sheep/engine/types';
  * @black-sheep/engine portfolio functions and adds terminal-grade risk gauges.
  */
 
-export const STARTING_CAPITAL = 10_000_000;
+export { STARTING_CAPITAL } from '../../config/game';
 
 export type RiskLabel = 'LOW' | 'MODERATE' | 'HIGH' | 'CRITICAL';
 

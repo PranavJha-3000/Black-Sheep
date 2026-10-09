@@ -12,6 +12,7 @@ import type { RivalFund } from '@black-sheep/engine/rival';
 import { apiFetch } from './api';
 import { projectState } from './stateMapper';
 import type { ProjectionPrev } from './stateMapper';
+import { STARTING_CAPITAL } from '../../config/game';
 
 export type Phase = 'auth' | 'lobby' | 'trading';
 
@@ -139,7 +140,7 @@ function seedMarket(): Record<Ticker, Company> {
   };
 }
 
-const SEED_FUND = createFund(10_000_000, 0);
+const SEED_FUND = createFund(STARTING_CAPITAL, 0);
 
 // ---------------------------------------------------------------------------
 // Store
@@ -163,9 +164,9 @@ export const useGameStore = create<GameStoreState>((set, get) => ({
   tickCount: 0,
   timestamp: 0,
   fund: _initFund,
-  nav: 10_000_000,
-  cash: 10_000_000,
-  availCash: 10_000_000,
+  nav: STARTING_CAPITAL,
+  cash: STARTING_CAPITAL,
+  availCash: STARTING_CAPITAL,
   unrealizedPnL: 0,
   dailyPnl: 0,
   dailyPnlPct: 0,
@@ -178,9 +179,9 @@ export const useGameStore = create<GameStoreState>((set, get) => ({
   riskLabel: 'LOW',
   liquidationAt: 0,
   cashPct: 100,
-  peakNav: 10_000_000,
+  peakNav: STARTING_CAPITAL,
   rivalFund: { ...SEED_FUND, personality: 'contrarian' as const, lastDecision: null },
-  rivalNav: 10_000_000,
+  rivalNav: STARTING_CAPITAL,
   rivalThinking: false,
   events: [],
   flow: {},

@@ -12,9 +12,8 @@
  */
 
 import type { Company, FlowRecord, MarketEvent, MarketState, Ticker } from './types';
+import { FLOW_CAP, IMPACT_COEFF, MAX_IMPACT, MEAN_REVERSION } from '../../../config/game';
 
-/** Mean-reversion strength per tick (fraction of the gap closed). */
-const MEAN_REVERSION = 0.02;
 /** Floor so prices never reach zero or go negative. */
 const MIN_PRICE = 0.01;
 
@@ -126,27 +125,6 @@ function isAffected(c: Company, event: MarketEvent): boolean {
 // ---------------------------------------------------------------------------
 // Market-impact engine — order-flow price formation
 // ---------------------------------------------------------------------------
-
-/**
- * Calibration constant for the square-root impact model. Higher = trades move
- * price more for a given participation rate. Tuned so a $5M trade on thin
- * HELX (~$40M ADV) moves ~3.5%, same $5M on deep APXB (~$1.2B ADV) moves
- * ~0.65% — a 5.5x liquidity spread that is visible on the chart.
- */
-const IMPACT_COEFF = 0.1;
-
-/**
- * Hard cap on single-trade impact. Without this, a sufficiently large trade
- * could liquidate the entire market in one execution — unrealistic and
- * unfungeable. Acts as an analog to exchange-level circuit breakers
- * (e.g. CME/LME price limits, NYSE Rule 80A collars) that halt or throttle
- * moves beyond a threshold. Set at 8%: enough that small trades feel
- * inconsequential and even aggressive sizing can't single-tick crash a name.
- */
-const MAX_IMPACT = 0.08;
-
-/** Max entries retained in MarketState.recentFlow. */
-const FLOW_CAP = 50;
 
 /**
  * Compute the percentage price impact of a trade using the square-root model.

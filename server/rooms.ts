@@ -15,6 +15,7 @@ import type { Direction, Position, Ticker } from '@black-sheep/engine/types';
 import { prisma } from './db';
 import { requireAuth, wrap, type AuthedRequest } from './auth';
 import { ensureWorld, getWorld, withWorldLock } from './world';
+import { STARTING_CAPITAL } from '../config/game';
 
 /**
  * Room lifecycle + the read-only state endpoint + the player trade endpoint.
@@ -27,7 +28,6 @@ import { ensureWorld, getWorld, withWorldLock } from './world';
  * openPosition/closePosition the browser simulation used in Phases 1-2.
  */
 
-const STARTING_CAPITAL = 10_000_000;
 // Unambiguous alphabet: no 0/O, 1/I/L — safe to read aloud / type.
 const CODE_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
 const CODE_LENGTH = 6;
