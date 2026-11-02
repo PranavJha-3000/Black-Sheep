@@ -262,3 +262,23 @@ model DirectorDecisionLog {
 
   @@index([worldId, id])
 }
+
+/// A controlled experiment (VISION §10 Mode B, D-032): one variable varied
+/// across arms, every arm run on the same seeds, independent of the live
+/// world. Spec, reproducibility manifest and results are stored as JSON.
+model Experiment {
+  id           Int       @id @default(autoincrement())
+  createdAt    DateTime  @default(now())
+  name         String
+  /// queued | running | done | failed
+  status       String    @default("queued")
+  variable     String
+  specJson     String
+  manifestJson String
+  resultJson   String?
+  error        String?
+  startedAt    DateTime?
+  finishedAt   DateTime?
+
+  @@index([status, id])
+}
