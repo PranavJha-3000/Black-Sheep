@@ -12,7 +12,7 @@ export default function FundsStrip() {
   if (funds.length === 0) return null;
 
   return (
-    <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
       {funds.map((f) => {
         const model = f.model ? (MODEL_REGISTRY[f.model as keyof typeof MODEL_REGISTRY]?.displayName ?? f.model) : 'UNREGISTERED';
         const status = f.liquidated ? 'LIQUIDATED' : f.thinking ? 'THINKING' : 'LIVE';
@@ -38,7 +38,17 @@ export default function FundsStrip() {
                 {fmtPct(f.pnlPct)}
               </span>
             </div>
-            <div className="truncate text-[9px] text-terminal-dim">{f.lastAction ?? 'NO DECISION YET'}</div>
+            <div className="flex justify-between gap-2 text-[9px] text-terminal-dim">
+              <span className="truncate">
+                {f.lastAction ?? 'NO DECISION YET'}
+                {f.lastSource ? ` · ${f.lastSource.toUpperCase()}` : ''}
+              </span>
+              {f.budgetUsd !== null && (
+                <span className="shrink-0" title="Model spend today / daily budget">
+                  {fmtMoney(f.spendUsd ?? 0, 2)} / {fmtMoney(f.budgetUsd, 2)}
+                </span>
+              )}
+            </div>
           </div>
         );
       })}

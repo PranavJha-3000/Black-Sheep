@@ -108,6 +108,19 @@ describe('stateMapper (poll → terminal projection)', () => {
     expect(p.funds[2].thinking).toBe(true);
   });
 
+  it('carries spend vs budget and the last decision source into the strip', () => {
+    const decision = {
+      action: 'buy', ticker: 'NOVA', reasoning: 'r', confidence: 0.6, fillPrice: 100, realizedPnL: null,
+      tickCountAt: 10, timestamp: new Date(0), source: 'llm', model: 'claude-opus-5-5',
+    };
+    const p = projectState(
+      payload([fund(1, { name: 'CROWN MERIDIAN', spend: { todayUsd: 0.5, dailyBudgetUsd: 2 }, lastDecision: decision }), fund(2)]),
+      seededPrev(),
+    );
+    expect(p.funds[0]).toMatchObject({ spendUsd: 0.5, budgetUsd: 2, lastSource: 'llm' });
+    expect(p.funds[1]).toMatchObject({ spendUsd: null, budgetUsd: null, lastSource: null });
+  });
+
   it('focuses the lowest-id registered fund over a legacy unregistered one', () => {
     const p = projectState(payload([fund(1, { name: 'APEX CAPITAL' }), fund(5, { name: 'HALDEN WHITMORE' })]), seededPrev());
     expect(p.fundId).toBe(5);

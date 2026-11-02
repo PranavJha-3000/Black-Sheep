@@ -41,6 +41,11 @@ export interface FundSummary {
   personality: string | null;
   model: string | null;
   lastAction: string | null;
+  /** Provider spend today and the daily budget (null outside the registry). */
+  spendUsd: number | null;
+  budgetUsd: number | null;
+  /** 'llm' | 'policy' | 'budget' — who made the last decision. */
+  lastSource: string | null;
 }
 
 /** The full set of store fields a poll writes. */
@@ -208,6 +213,9 @@ export function projectState(raw: WorldStatePayload, prev: ProjectionPrev): Proj
       personality: f.profile?.personality ?? null,
       model: f.profile?.model ?? null,
       lastAction: f.lastDecision ? `${f.lastDecision.action.toUpperCase()}${f.lastDecision.ticker ? ' ' + f.lastDecision.ticker : ''}` : null,
+      spendUsd: f.spend?.todayUsd ?? null,
+      budgetUsd: f.spend?.dailyBudgetUsd ?? null,
+      lastSource: f.lastDecision?.source ?? null,
     })),
   };
 }
