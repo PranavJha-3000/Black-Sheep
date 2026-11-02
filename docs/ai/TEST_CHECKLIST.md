@@ -82,3 +82,10 @@ Run before any change counts as done.
 - [ ] (Needs DB) after a fund's filled trade an `AgentMemory` row (kind `episodic`) appears; holds write none; after 3 closes a `reflective` row appears
 - [ ] (Needs DB) restart the server → `/world/state` `funds[].memory` still lists the same newest entries
 - [ ] (Needs DB) no `AgentMemory.content` of kind `relationship` contains a `$`
+
+### Stage 6 — observer UI
+- [ ] `npm test` includes `server/observerCore.test.ts` and the selected-fund focus tests in `stateMapper.test.ts`
+- [ ] Vite dev → sidebar WORLD / FUNDS / ACTIVITY switch views; FUND DETAIL is disabled until a fund is picked; TIMELINE / RESEARCH LAB / ANALYTICS are disabled; no "YOUR POSITIONS" / "RAVEN CAPITAL" copy
+- [ ] Network tab: `/world/activity` is requested only while ACTIVITY is open; `/world/funds/:id/trace` only in FUND DETAIL
+- [ ] (Needs DB) `curl localhost:3001/world/funds/abc/trace` and `/world/funds/999999/trace` → 404
+- [ ] (Needs DB + key) FUND DETAIL → expanding an `llm` decision shows its tool calls with inputs and outputs

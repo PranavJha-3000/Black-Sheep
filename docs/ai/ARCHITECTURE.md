@@ -14,7 +14,8 @@
 | `server/world.ts` | The single live world (`ensureLiveWorld`, `getLiveWorld`, `withWorldLock`, `startWorldLoop`); 5s loop; snapshots + event logs; **one `Agent` per registered fund** (own cadence slot, pending flag, brain) + state-diff persistence; **liquidation of every fund** (`liquidateFunds`); **peak NAV tracking** (`trackPeakNav`) | db, engine, worldCore |
 | `server/budget.ts` | PURE pricing (`costOfUsage`, `estimateCallCostUsd`) and the in-process `BudgetLedger` (reserve/settle per fund + global daily limit + concurrency cap, UTC-day rollover) | config |
 | `server/providers/anthropic.ts` | The only provider adapter: `@anthropic-ai/sdk` beta messages call + the bounded tool loop `runDecisionLoop` (metered, never throws) | SDK, engine fundTools, budget |
-| `server/worldRoutes.ts` | `GET /world/state` — public, no auth; builds the payload via `buildWorldStatePayload` | db, world, worldCore |
+| `server/observerCore.ts` | PURE builders for the investigation payloads: per-fund decision traces (model call + tool calls + memory) and the activity feed | engine types, worldCore types |
+| `server/worldRoutes.ts` | `GET /world/state`, `GET /world/funds/:id/trace`, `GET /world/activity` — public, no auth, read-only | db, world, worldCore |
 | `server/index.ts` | Express app, routes (`/auth`, `/world`), error handler, world clock start | all server modules |
 | `prisma/schema.prisma` | Postgres schema: User, World, Fund, Position, MarketTick, MarketEventLog, RivalDecisionLog (+ source/model/llmCallId), LiquidationLog, LlmCallLog, ToolCallLog, AgentMemory. Init migration in `prisma/migrations/20261102000000_init` | @prisma/client |
 | `src/store/gameStore.ts` | Read-only zustand projection of public `GET /world/state` (polled every 2.5s); focuses the lowest-id fund and summarises every fund (`funds`) for `FundsStrip`; no auth, lobby, local simulation or trading | engine, server API |
