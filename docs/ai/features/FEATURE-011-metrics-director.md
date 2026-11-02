@@ -24,5 +24,5 @@ Full plan: `docs/superpowers/plans/2026-11-02-stage7-metrics-director.md`
 D-028, D-029
 
 ## Verification
-`npm run typecheck` 0, `npm test` 213/213, `npm run lint` 0, `npm run build` ✓; boot smoke (`DIRECTOR_MODE=jev`) `/health` 200; Vite smoke — ANALYTICS enabled and renders its loading state.
+`npm run typecheck` 0, `npm test` 215/215, `npm run lint` 0, `npm run build` ✓; boot smoke (`DIRECTOR_MODE=jev`) `/health` 200; Vite smoke — ANALYTICS enabled and renders its loading state.
 Not verified: the migration, the Director against a live DB, analytics with real data (no Postgres).

@@ -142,6 +142,8 @@ export const OBSERVER_ACTIVITY_LIMIT = 40;
 export const ANALYTICS_NAV_POINTS = 2000;
 /** Recent market events used for world analytics. */
 export const ANALYTICS_EVENT_LIMIT = 500;
+/** ANALYTICS is aggregate and DB-heavy: refetched at most this often while open. */
+export const ANALYTICS_POLL_MS = 15_000;
 
 // --- World Director (packages/engine/src/director.ts, server/world.ts) ---
 /** 'none' | 'rule' | 'jev'. The DIRECTOR_MODE env var overrides it; 'jev' acts as 'none' until the Jev adapter is configured. */

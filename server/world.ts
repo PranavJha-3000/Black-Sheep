@@ -128,7 +128,7 @@ export interface Agent {
   memory: MemoryEntry[];
 }
 
-interface World {
+export interface World {
   worldId: number;
   name: string;
   /** Persisted at creation; a restart resumes the same RNG stream (D-018). */
@@ -409,7 +409,17 @@ async function trackPeakNav(w: World): Promise<{ fundId: number; nav: number; gr
  * let the configured Director propose, validate, and have the engine build
  * the event. Every cycle is logged, including "no intervention".
  */
-async function runDirector(w: World, market: MarketState, eventFiredThisTick: boolean): Promise<MarketEvent | null> {
+export async function runDirector(w: World, market: MarketState, eventFiredThisTick: boolean): Promise<MarketEvent | null> {
+  try {
+    return await directorCycle(w, market, eventFiredThisTick);
+  } catch (err) {
+    // The scheduler has already advanced this tick: aborting it would lose that event.
+    console.error('[world] director cycle failed; no intervention this cycle', err);
+    return null;
+  }
+}
+
+async function directorCycle(w: World, market: MarketState, eventFiredThisTick: boolean): Promise<MarketEvent | null> {
   const obs = observeWorld({
     market,
     lastEventTick: w.director.lastEventTick,

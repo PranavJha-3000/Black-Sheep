@@ -20,7 +20,8 @@ export interface AnalyticsFundInput {
   exposures: number[];
   /** Sum of entry notional of every position the fund opened (for turnover). */
   openedNotional: number;
-  decisions: { total: number; bySource: Record<string, number> };
+  /** `policyAfterCall`: policy decisions taken because a model call returned no decision. */
+  decisions: { total: number; bySource: Record<string, number>; policyAfterCall: number };
   calls: {
     count: number;
     byOutcome: Record<string, number>;
@@ -55,7 +56,7 @@ export interface FundAnalytics {
   ai: {
     decisions: number;
     llmDecisions: number;
-    /** Share of decisions not made by the model (policy, budget, busy). */
+    /** Of the decisions where the model was due, the share it did not make (budget, busy, or a call with no decision). Routine policy decisions are excluded. */
     fallbackRate: number | null;
     calls: number;
     /** Share of model calls that ended without a decision. */
@@ -83,6 +84,7 @@ export function buildAnalytics(input: AnalyticsInput): AnalyticsPayload {
   const funds = input.funds.map((f): FundAnalytics => {
     const meanNav = f.navs.length > 0 ? f.navs.reduce((a, b) => a + b, 0) / f.navs.length : 0;
     const llmDecisions = f.decisions.bySource.llm ?? 0;
+    const fallbacks = (f.decisions.bySource.budget ?? 0) + (f.decisions.bySource.busy ?? 0) + f.decisions.policyAfterCall;
     const decided = f.calls.byOutcome.decided ?? 0;
     return {
       id: f.id,
@@ -99,7 +101,7 @@ export function buildAnalytics(input: AnalyticsInput): AnalyticsPayload {
       ai: {
         decisions: f.decisions.total,
         llmDecisions,
-        fallbackRate: ratio(f.decisions.total - llmDecisions, f.decisions.total),
+        fallbackRate: ratio(fallbacks, llmDecisions + fallbacks),
         calls: f.calls.count,
         failureRate: ratio(f.calls.count - decided, f.calls.count),
         inputTokens: f.calls.inputTokens,

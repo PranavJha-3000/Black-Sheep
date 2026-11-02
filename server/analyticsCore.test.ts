@@ -12,7 +12,8 @@ function fund(over: Partial<AnalyticsFundInput> = {}): AnalyticsFundInput {
     navs: [100, 110, 99, 121],
     exposures: [30, -10],
     openedNotional: 215,
-    decisions: { total: 10, bySource: { llm: 6, policy: 3, budget: 1 } },
+    // 3 policy decisions: 2 routine (model not woken), 1 after a model call gave no decision.
+    decisions: { total: 10, bySource: { llm: 6, policy: 3, budget: 1 }, policyAfterCall: 1 },
     calls: { count: 8, byOutcome: { decided: 6, refusal: 1, error: 1 }, inputTokens: 24000, outputTokens: 6000, costUsd: 0.6, totalLatencyMs: 40000, toolCalls: 20 },
     ...over,
   };
@@ -34,7 +35,8 @@ describe('buildAnalytics', () => {
     expect(f.ai).toEqual({
       decisions: 10,
       llmDecisions: 6,
-      fallbackRate: 0.4,
+      // (budget 1 + failed call 1) / (llm 6 + budget 1 + failed call 1); routine policy is not a fallback
+      fallbackRate: 0.25,
       calls: 8,
       failureRate: 0.25,
       inputTokens: 24000,
@@ -48,7 +50,7 @@ describe('buildAnalytics', () => {
 
   it('a fund with no history has null rates, never NaN', () => {
     const f = buildAnalytics({
-      funds: [fund({ navs: [], exposures: [], openedNotional: 0, decisions: { total: 0, bySource: {} }, calls: { count: 0, byOutcome: {}, inputTokens: 0, outputTokens: 0, costUsd: 0, totalLatencyMs: 0, toolCalls: 0 } })],
+      funds: [fund({ navs: [], exposures: [], openedNotional: 0, decisions: { total: 0, bySource: {}, policyAfterCall: 0 }, calls: { count: 0, byOutcome: {}, inputTokens: 0, outputTokens: 0, costUsd: 0, totalLatencyMs: 0, toolCalls: 0 } })],
       events: [],
       director: DIRECTOR,
     }).funds[0];

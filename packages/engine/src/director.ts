@@ -104,11 +104,12 @@ export function ruleDirector(obs: DirectorObservation): DirectorDecision {
   if (obs.ticksSinceLastEvent < DIRECTOR_QUIET_TICKS) {
     return { intervention: NONE, rationale: 'Events are recent; the world is supplying its own variation.' };
   }
-  if (obs.avgAbsChangePct >= DIRECTOR_CALM_ABS_CHANGE) {
-    return { intervention: NONE, rationale: 'Prices are moving on their own; no intervention.' };
-  }
+  // Checked before the calm test: a broad run-up always moves the mean |change| too.
   if (obs.marketChangePct >= DIRECTOR_RUNUP_CHANGE) {
     return { intervention: { kind: 'macro_tightening' }, rationale: 'A quiet market has drifted up; test it with tighter policy.' };
+  }
+  if (obs.avgAbsChangePct >= DIRECTOR_CALM_ABS_CHANGE) {
+    return { intervention: NONE, rationale: 'Prices are moving on their own; no intervention.' };
   }
   const slot = Math.floor(obs.tickCount / DIRECTOR_EVERY_TICKS);
   if (obs.sectors.length === 0 || slot % 3 === 2) {

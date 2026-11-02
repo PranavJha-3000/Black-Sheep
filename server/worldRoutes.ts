@@ -188,10 +188,11 @@ worldRouter.get(
     const funds = await prisma.fund.findMany({ where: { worldId: w.worldId }, orderBy: { id: 'asc' } });
     const inputs: AnalyticsFundInput[] = [];
     for (const f of funds) {
-      const [snaps, positions, bySource, byOutcome, toolCalls] = await Promise.all([
+      const [snaps, positions, bySource, policyAfterCall, byOutcome, toolCalls] = await Promise.all([
         prisma.fundNavSnapshot.findMany({ where: { fundId: f.id }, orderBy: { id: 'desc' }, take: ANALYTICS_NAV_POINTS, select: { nav: true } }),
         prisma.position.findMany({ where: { fundId: f.id }, select: { ticker: true, direction: true, quantity: true, entryPrice: true, closedAt: true } }),
         prisma.rivalDecisionLog.groupBy({ by: ['source'], where: { fundId: f.id }, _count: { _all: true } }),
+        prisma.rivalDecisionLog.count({ where: { fundId: f.id, source: 'policy', llmCallId: { not: null } } }),
         prisma.llmCallLog.groupBy({
           by: ['outcome'],
           where: { fundId: f.id },
@@ -217,6 +218,7 @@ worldRouter.get(
         decisions: {
           total: bySource.reduce((a, r) => a + r._count._all, 0),
           bySource: Object.fromEntries(bySource.map((r) => [r.source, r._count._all])),
+          policyAfterCall,
         },
         calls: {
           count: byOutcome.reduce((a, r) => a + r._count._all, 0),

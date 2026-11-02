@@ -62,4 +62,14 @@ describe('gameStore ANALYTICS polling', () => {
     await flush();
     expect(useGameStore.getState().analytics).toEqual(payload);
   });
+
+  it('does not refetch analytics on every poll (review I-4)', async () => {
+    useGameStore.getState().setView('analytics');
+    pending.forEach((p) => p.resolve(p.path === '/world/state' ? world : null));
+    await flush();
+    pending.length = 0;
+    void useGameStore.getState().poll();
+    expect(pending.some((p) => p.path === '/world/state')).toBe(true);
+    expect(pending.some((p) => p.path === '/world/analytics')).toBe(false);
+  });
 });

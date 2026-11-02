@@ -15,7 +15,7 @@ import type { FundSummary, ProjectionPrev } from './stateMapper';
 import type { WorldStatePayload } from '../../server/worldCore';
 import type { ActivityPayload, FundTracePayload } from '../../server/observerCore';
 import type { AnalyticsPayload } from '../../server/analyticsCore';
-import { STARTING_CAPITAL } from '../../config/game';
+import { ANALYTICS_POLL_MS, STARTING_CAPITAL } from '../../config/game';
 
 /** Observer navigation (VISION §13). TIMELINE and RESEARCH LAB come later. */
 export type ObserverView = 'world' | 'funds' | 'fund' | 'activity' | 'analytics';
@@ -134,6 +134,9 @@ function seedState(): SeedState {
   };
 }
 
+/** When the analytics fetch last started; 0 forces a fetch on the next poll. */
+let analyticsFetchedAt = 0;
+
 export const useGameStore = create<GameStoreState>((set, get) => ({
   ...seedState(),
   selectedTicker: 'NOVA' as Ticker,
@@ -149,6 +152,7 @@ export const useGameStore = create<GameStoreState>((set, get) => ({
   reset: () => set(seedState()),
   selectTicker: (ticker: Ticker) => set({ selectedTicker: ticker }),
   setView: (view: ObserverView) => {
+    analyticsFetchedAt = 0;
     set({ view });
     void get().poll();
   },
@@ -160,13 +164,15 @@ export const useGameStore = create<GameStoreState>((set, get) => ({
     try {
       const { priceHistory, navHistory, rivalDecisionKey, fundId, view, selectedFundId } = get();
       // Only the open view's investigation endpoint is polled.
+      const wantAnalytics = view === 'analytics' && Date.now() - analyticsFetchedAt >= ANALYTICS_POLL_MS;
+      if (wantAnalytics) analyticsFetchedAt = Date.now();
       const [raw, trace, activity, analytics] = await Promise.all([
         apiFetch<WorldStatePayload>('/world/state'),
         view === 'fund' && selectedFundId !== null
           ? apiFetch<FundTracePayload>(`/world/funds/${selectedFundId}/trace`).catch(() => null)
           : Promise.resolve(null),
         view === 'activity' ? apiFetch<ActivityPayload>('/world/activity').catch(() => null) : Promise.resolve(null),
-        view === 'analytics' ? apiFetch<AnalyticsPayload>('/world/analytics').catch(() => null) : Promise.resolve(null),
+        wantAnalytics ? apiFetch<AnalyticsPayload>('/world/analytics').catch(() => null) : Promise.resolve(null),
       ]);
 
       const prev: ProjectionPrev = {

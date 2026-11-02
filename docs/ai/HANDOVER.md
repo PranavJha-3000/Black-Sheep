@@ -7,6 +7,7 @@
 - Avoid: Do not duplicate engine logic — import `@black-sheep/engine/*`. Every async Express route goes through `wrap()`. Prisma pinned to v6. Never call an LLM from the browser (VISION §14.9). Every field added to `buildWorldStatePayload` is public. Run ONE server process per DB. A fund's identity is its registry `name` — renaming an entry starts a new fund.
 
 ## Open items
+- [ ] Stage 7 review minors (deferred): a crash between a Director event and the next snapshot leaves `DirectorDecisionLog.applied = true` for an event the restored market never had (cooldown blocks re-applying); macro events scale by `rateSensitivity` (up to 1.6), so one stock can move ~8%, not the 5% D-029 states; NAV metrics use the newest 2000 snapshots while turnover uses all-time notional (not stated in notes); max drawdown can exceed 100% after liquidation; `director.mode` is the current mode while counts span every mode ever run (group by mode); a failed `fundNavSnapshot.createMany` skips that tick's decision cycle; a failed analytics fetch keeps the stale payload silently; the snapshot-cadence note is hardcoded; the Director's "change" is distance from the mean-reversion anchor (`previousClose`, never rolled), not a daily change.
 - [ ] **Jev (Stage 7):** the adapter is a stub. Needs Jev's API URL, auth, response contract, pricing and usage reporting (VISION §8). When implemented: call it OUTSIDE the world lock, validate/apply inside, and meter its spend separately from the funds.
 - [ ] Delete parked branch `wip/stage2-global-world` (user decision; nothing from it was merged).
 - [ ] **Cost (Stage 4):** with a key, spend is capped at $2/fund/day and $10/day overall (`config/funds.ts`, `config/game.ts`). Never verified against a live key — first live run: watch `LlmCallLog` cost per call vs the ~$0.47 worst-case estimate.
@@ -30,7 +31,7 @@
 ### 2026-11-02 · Claude Opus 5.5 (Claude Code) · Stage 7 metrics, analytics, World Director
 CHANGED: New engine `metrics.ts`, `director.ts`; `server/providers/jev.ts` (stub), `server/analyticsCore.ts`; `world.ts` runs the Director every 10 ticks and writes `FundNavSnapshot`/`DirectorDecisionLog` (migration `20261102040000_metrics_director`); route `GET /world/analytics`; store `analytics` + `AnalyticsView`; ANALYTICS nav enabled.
 WHY: VISION §8, §11, §13 view 7. See D-028, D-029.
-VERIFY: `npm run typecheck` 0, `npm test` 213/213, `npm run lint` 0, `npm run build` ✓; boot smoke `/health` 200 with `DIRECTOR_MODE=jev`; Vite smoke — ANALYTICS renders.
+VERIFY: `npm run typecheck` 0, `npm test` 215/215, `npm run lint` 0, `npm run build` ✓; boot smoke `/health` 200 with `DIRECTOR_MODE=jev`; Vite smoke — ANALYTICS renders.
 NOT VERIFIED: migration, Director cycles and analytics against a live DB (no Postgres); `/world/analytics` returns 500 without a DB, like every DB route.
 
 ### 2026-11-02 · Claude Opus 5.5 (Claude Code) · Stage 6 observer UI
