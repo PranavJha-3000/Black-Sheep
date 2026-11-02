@@ -6,7 +6,6 @@ interface Props { position: Position; }
 export default function PositionRow({ position }: Props) {
   const price = useGameStore((s) => s.companies[position.ticker]?.price ?? 0);
   const nav = useGameStore((s) => s.nav);
-  const close = useGameStore((s) => s.closePosition);
   // Live fight marker: the rival is directly against this exact position.
   const contested = useGameStore((s) => s.contested.includes(position.ticker));
   const pnl = positionPnl(position, price);
@@ -43,7 +42,6 @@ export default function PositionRow({ position }: Props) {
           {risk >= 60 && <span>⚠</span>}
         </span>
       </td>
-      <td className="px-2 py-2 text-right"><button onClick={() => close(position.id)} className="rounded border border-[#2c2c2c] bg-[#161616] px-2.5 py-1 text-[11px] text-terminal-text hover:border-terminal-red hover:text-terminal-red">Close</button></td>
     </tr>
   );
 }

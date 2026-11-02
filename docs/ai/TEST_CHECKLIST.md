@@ -41,10 +41,10 @@ Run before any change counts as done.
 
 ### Phase 4 — frontend on the backend (this turn)
 - [ ] `npm run typecheck` / `npm test` (84/84) / `npm run lint` / `npm run build` — all green
-- [ ] (Needs DB) log in as A + B in two tabs, same room: same market; A's trade moves B's tape within one poll (~2.5s)
+- ~~REMOVED Stage 1 (no human trading)~~ (Needs DB) log in as A + B in two tabs, same room: same market; A's trade moves B's tape within one poll (~2.5s)
 - [ ] (Needs DB) close tab with trading phase, reopen later: auto-resumes room, market has moved on; away-summary takeover shows when window is long + notable
-- [ ] (Needs DB) `POST /rooms/:code/trade` with a junk order → 400 with the engine rejection string; poll after shows no phantom position
-- [ ] State response still contains NO other player's positions or cash (aggregates only — re-verify after trade route)
+- ~~REMOVED Stage 1 (no human trading)~~ (Needs DB) `POST /rooms/:code/trade` with a junk order → 400 with the engine rejection string; poll after shows no phantom position
+- [ ] State response still contains NO other player's positions or cash (aggregates only)
 
 - [ ] Without `ANTHROPIC_API_KEY`: game still runs; rival reasons with templated rule-based text
 - [ ] With a key in `.env`: RivalPanel shows "APEX CAPITAL is reviewing positions..." then a 1–2 sentence LLM thesis

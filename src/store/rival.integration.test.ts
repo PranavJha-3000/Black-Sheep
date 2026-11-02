@@ -33,4 +33,11 @@ describe('rival integration (store wiring)', () => {
     expect(r.contested).toEqual([]);
     expect(r.rivalThinking).toBe(false);
   });
+
+  it('is observer-only: the store exposes no trading actions', () => {
+    const s = useGameStore.getState() as unknown as Record<string, unknown>;
+    expect(s.buy).toBeUndefined();
+    expect(s.short).toBeUndefined();
+    expect(s.closePosition).toBeUndefined();
+  });
 });

@@ -1,7 +1,6 @@
 import { useEffect } from "react";
 import Ticker from "./Ticker";
 import StockChart from "./StockChart";
-import OrderTicket from "./OrderTicket";
 import TopBar from "./TopBar";
 import Hero from "./Hero";
 import Mid from "./Mid";
@@ -49,8 +48,7 @@ export default function Terminal() {
           <Hero />
           <Mid />
           <div className="grid grid-cols-12 gap-2 pb-1">
-            <div className="col-span-8 min-h-[260px]"><StockChart /></div>
-            <div className="col-span-4"><OrderTicket /></div>
+            <div className="col-span-12 min-h-[260px]"><StockChart /></div>
           </div>
           <div className="grid grid-cols-12 gap-2 pb-1">
             <div className="col-span-4"><RivalPanel /></div>

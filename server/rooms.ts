@@ -1,31 +1,26 @@
 import { Router, type Request } from 'express';
 import {
   availableCash,
-  closePosition as engClose,
   getExposure,
   INITIAL_MARGIN_RATE,
   markToMarket,
-  openPosition as engOpen,
-  positionPnl,
 } from '@black-sheep/engine/portfolio';
-import { applyTrade, getNetFlow } from '@black-sheep/engine/market';
+import { getNetFlow } from '@black-sheep/engine/market';
 import { RIVAL_NAME } from '@black-sheep/engine/rival';
 import type { Fund } from '@black-sheep/engine/portfolio';
-import type { Direction, Position, Ticker } from '@black-sheep/engine/types';
+import type { Direction, Ticker } from '@black-sheep/engine/types';
 import { prisma } from './db';
 import { requireAuth, wrap, type AuthedRequest } from './auth';
-import { ensureWorld, getWorld, withWorldLock } from './world';
+import { ensureWorld } from './world';
 import { STARTING_CAPITAL } from '../config/game';
 
 /**
- * Room lifecycle + the read-only state endpoint + the player trade endpoint.
+ * Room lifecycle + the read-only state endpoint. Humans observe; they do not trade.
  *
  * The information firewall from Phases 1-2 survives the move to multiplayer:
  * /state NEVER returns other players' positions or cash. Other funds expose
  * only { name, nav, netExposure } — the same class of aggregate signal the
  * rival's RivalDecisionInput was built around. Your own book is fully yours.
- * /trade is the only write path, and it fills through the SAME engine
- * openPosition/closePosition the browser simulation used in Phases 1-2.
  */
 
 // Unambiguous alphabet: no 0/O, 1/I/L — safe to read aloud / type.
@@ -159,168 +154,6 @@ roomsRouter.post('/:code/join', wrap(async (req, res) => {
   res.status(201).json({ room: { code: room.code }, fund: { id: fund.id, name: fund.name } });
 }));
 
-// ---------------------------------------------------------------------------
-// POST /rooms/:code/trade — the ONLY write path for a player's orders.
-// Server is source of truth: fills through the same engine openPosition/
-// closePosition the browser used in Phases 1-2, applies market impact before
-// the fill, and persists cash + position atomically under the per-room lock.
-// The client optimistically applies the same math locally, then reconciles
-// on the next poll.
-// ---------------------------------------------------------------------------
-roomsRouter.post('/:code/trade', wrap(async (req, res) => {
-  const { userId } = authed(req);
-  const room = await prisma.room.findUnique({ where: { code: req.params.code.toUpperCase() } });
-  if (!room || room.status !== 'active') {
-    res.status(404).json({ error: 'Room not found or already ended.' });
-    return;
-  }
-  const myFund = await prisma.fund.findUnique({
-    where: { roomId_userId: { roomId: room.id, userId } },
-  });
-  if (!myFund) {
-    res.status(403).json({ error: 'You have not joined this room.' });
-    return;
-  }
-
-  const body = (req.body ?? {}) as {
-    action?: unknown;
-    ticker?: unknown;
-    dollarAmount?: unknown;
-    leverage?: unknown;
-    positionId?: unknown;
-  };
-  const action = body.action;
-  if (action !== 'buy' && action !== 'short' && action !== 'close') {
-    res.status(400).json({ error: 'action must be buy, short, or close.' });
-    return;
-  }
-
-  // Serialize with ticks/rival mutations so no price impact gets clobbered.
-  const outcome = await withWorldLock(room.id, async () => {
-    const w = await ensureWorld(room.id);
-
-    if (action === 'close') {
-      const positionId = typeof body.positionId === 'string' ? body.positionId : '';
-      const numericId = Number.parseInt(positionId.replace(/^db-/, ''), 10);
-      if (!Number.isInteger(numericId) || numericId <= 0) {
-        return { status: 400, body: { error: 'Invalid positionId.' } };
-      }
-      const row = await prisma.position.findFirst({
-        where: { id: numericId, fundId: myFund.id, closedAt: null },
-      });
-      if (!row) {
-        return { status: 400, body: { error: 'Position not found or already closed.' } };
-      }
-      const direction: Direction = row.direction === 'short' ? 'short' : 'long';
-      const currentPrice = w.market.companies[row.ticker]?.price ?? row.entryPrice;
-      const enginePos: Position = {
-        id: `db-${row.id}`,
-        ticker: row.ticker as Ticker,
-        direction,
-        quantity: row.quantity,
-        entryPrice: row.entryPrice,
-        entryTimestamp: row.entryTimestamp.getTime(),
-        marginReserved: direction === 'short' ? INITIAL_MARGIN_RATE * row.quantity * row.entryPrice : 0,
-      };
-      const engineFund: Fund = {
-        cash: myFund.cash,
-        positions: [enginePos],
-        realizedPnL: 0,
-        startingCapital: myFund.startingCapital,
-        history: [],
-      };
-      const after = engClose(engineFund, enginePos.id, currentPrice);
-      if (after === engineFund) {
-        return { status: 400, body: { error: 'Could not close position.' } };
-      }
-      const realized = positionPnl(enginePos, currentPrice);
-      await prisma.$transaction([
-        prisma.fund.update({ where: { id: myFund.id }, data: { cash: after.cash } }),
-        prisma.position.update({
-          where: { id: numericId },
-          data: { closedAt: new Date(), exitPrice: currentPrice },
-        }),
-      ]);
-      return { status: 200, body: { ok: true, realizedPnL: realized, ticker: row.ticker } };
-    }
-
-    // buy / short
-    const ticker = typeof body.ticker === 'string' ? body.ticker.toUpperCase() : '';
-    if (!ticker || !w.market.companies[ticker]) {
-      return { status: 400, body: { error: 'Unknown ticker.' } };
-    }
-    const dollars = typeof body.dollarAmount === 'number' ? body.dollarAmount : Number.NaN;
-    if (!Number.isFinite(dollars) || dollars <= 0) {
-      return { status: 400, body: { error: 'dollarAmount must be a positive number.' } };
-    }
-    const lv = Math.max(1, Math.floor(typeof body.leverage === 'number' ? body.leverage : 1));
-    const notional = Math.floor(dollars) * lv;
-    if (notional <= 0) {
-      return { status: 400, body: { error: 'Order too small.' } };
-    }
-    const direction: Direction = action === 'buy' ? 'long' : 'short';
-
-    // Market impact BEFORE the fill, so the fill price includes our own move.
-    const impacted = applyTrade(w.market, ticker, notional, action === 'buy' ? 'buy' : 'sell');
-    const fillPrice = impacted.companies[ticker].price;
-
-    const open = await prisma.position.findMany({ where: { fundId: myFund.id, closedAt: null } });
-    const engineFund = engineFundFromRows(myFund.cash, myFund.startingCapital, open);
-    const after = engOpen(engineFund, ticker, direction, notional, fillPrice);
-    if (after === engineFund) {
-      return { status: 400, body: { error: 'Insufficient cash or margin for this order.' } };
-    }
-    const added = after.positions[after.positions.length - 1];
-    const createdPos = await prisma
-      .$transaction([
-        prisma.fund.update({ where: { id: myFund.id }, data: { cash: after.cash } }),
-        prisma.position.create({
-          data: {
-            fundId: myFund.id,
-            ticker,
-            direction,
-            quantity: added.quantity,
-            entryPrice: fillPrice,
-            entryTimestamp: new Date(added.entryTimestamp),
-          },
-        }),
-      ])
-      .then(([, pos]) => pos);
-
-    // Publish the impacted market so every observer sees this move next poll.
-    w.market = impacted;
-    return {
-      status: 200,
-      body: { ok: true, fillPrice, quantity: added.quantity, positionId: `db-${createdPos.id}` },
-    };
-  });
-
-  res.status(outcome.status).json(outcome.body);
-
-  // Best-effort peak NAV update after a successful trade. Not critical to be
-  // perfectly synchronized — the tick loop catches any missed updates.
-  if (outcome.status === 200) {
-    void updatePeakNav(myFund.id);
-  }
-}));
-
-/**
- * Update a single fund's all-time high NAV from current market prices.
- * Called after trades so the result-card peak stat stays current between ticks.
- */
-async function updatePeakNav(fundId: number): Promise<void> {
-  const fund = await prisma.fund.findUnique({ where: { id: fundId } });
-  if (!fund) return;
-  const open = await prisma.position.findMany({ where: { fundId, closedAt: null } });
-  const ef = engineFundFromRows(fund.cash, fund.startingCapital, open);
-  // We need the market — fetch it from the world if available.
-  const w = getWorld(fund.roomId);
-  if (!w) return;
-  const nav = markToMarket(ef, w.market).nav;
-  if (nav > fund.peakNav) {
-    await prisma.fund.update({ where: { id: fundId }, data: { peakNav: nav } });
-  }
-}
 // ---------------------------------------------------------------------------
 // GET /rooms/:code/state — market + all funds' NAV + your own positions.
 // Other players' positions/cash are NEVER included (aggregate signals only).

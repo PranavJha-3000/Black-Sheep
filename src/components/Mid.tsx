@@ -21,7 +21,7 @@ export default function Mid() {
 function PositionsTable(props: { positions: Position[] }) {
   return (
     <table className="w-full border-collapse">
-      <thead><tr className="text-left text-[10px] text-terminal-dim"><th className="px-2 py-1 font-normal">TICKER</th><th className="px-2 py-1 font-normal">DIR</th><th className="px-2 py-1 font-normal">SIZE</th><th className="px-2 py-1 font-normal">ENTRY</th><th className="px-2 py-1 font-normal">CUR</th><th className="px-2 py-1 font-normal">PNL</th><th className="px-2 py-1 font-normal">PCT</th><th className="px-2 py-1 font-normal">RISK</th><th className="px-2 py-1 text-right font-normal">ACT</th></tr></thead>
+      <thead><tr className="text-left text-[10px] text-terminal-dim"><th className="px-2 py-1 font-normal">TICKER</th><th className="px-2 py-1 font-normal">DIR</th><th className="px-2 py-1 font-normal">SIZE</th><th className="px-2 py-1 font-normal">ENTRY</th><th className="px-2 py-1 font-normal">CUR</th><th className="px-2 py-1 font-normal">PNL</th><th className="px-2 py-1 font-normal">PCT</th><th className="px-2 py-1 font-normal">RISK</th></tr></thead>
       <tbody>{props.positions.map((x) => (<PositionRow key={x.id} position={x} />))}</tbody>
     </table>
   );

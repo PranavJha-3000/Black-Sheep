@@ -2,9 +2,8 @@
  * Black Sheep — server-driven Zustand store.
  */
 import { create } from 'zustand';
-import { createFund, openPosition, closePosition, peakNav } from '@black-sheep/engine/portfolio';
+import { createFund } from '@black-sheep/engine/portfolio';
 import type { Fund } from '@black-sheep/engine/portfolio';
-import { derive } from './derive';
 import type { RiskLabel } from './derive';
 import type { Ticker, Company, MarketEvent } from '@black-sheep/engine/types';
 import type { ConfrontationEvent } from '@black-sheep/engine/rival';
@@ -86,11 +85,8 @@ export interface GameStoreState {
   leaveRoom: () => void;
   restart: () => void;
   setError: (error: string) => void;
-  // --- trading / UI actions ---
+  // --- UI actions ---
   selectTicker: (ticker: Ticker) => void;
-  buy: (ticker: Ticker, dollarAmount: number, leverage?: number) => void;
-  short: (ticker: Ticker, dollarAmount: number, leverage?: number) => void;
-  closePosition: (id: string) => void;
   dismissConfrontation: () => void;
   // --- poll / away ---
   poll: () => Promise<void>;
@@ -296,88 +292,6 @@ export const useGameStore = create<GameStoreState>((set, get) => ({
   clearError: () => set({ error: '' }),
   dismissConfrontation: () => set({ confrontation: null }),
   selectTicker: (ticker: Ticker) => set({ selectedTicker: ticker }),
-  buy: (ticker: Ticker, dollarAmount: number, _leverage?: number) => {
-    const { fund, companies } = get();
-    const price = companies[ticker]?.price ?? 0;
-    const updated = openPosition(fund, ticker, 'long', dollarAmount, price);
-    if (updated === fund) return;
-    const next = { ...get(), fund: updated };
-    const d = derive({ companies }, next.fund);
-    set({
-      fund: next.fund,
-      nav: d.nav,
-      cash: d.cash,
-      availCash: d.availCash,
-      unrealizedPnL: d.unrealizedPnL,
-      dailyPnl: d.dailyPnl,
-      dailyPnlPct: d.dailyPnlPct,
-      grossExposure: d.grossExposure,
-      netExposure: d.netExposure,
-      leverage: d.leverage,
-      marginUsedPercent: d.marginUsedPercent,
-      atRisk: d.atRisk,
-      riskPct: d.riskPct,
-      riskLabel: d.riskLabel,
-      liquidationAt: d.liquidationAt,
-      cashPct: d.cashPct,
-      peakNav: peakNav(next.fund),
-    });
-  },
-  short: (ticker: Ticker, dollarAmount: number, _leverage?: number) => {
-    const { fund, companies } = get();
-    const price = companies[ticker]?.price ?? 0;
-    const updated = openPosition(fund, ticker, 'short', dollarAmount, price);
-    if (updated === fund) return;
-    const next = { ...get(), fund: updated };
-    const d = derive({ companies }, next.fund);
-    set({
-      fund: next.fund,
-      nav: d.nav,
-      cash: d.cash,
-      availCash: d.availCash,
-      unrealizedPnL: d.unrealizedPnL,
-      dailyPnl: d.dailyPnl,
-      dailyPnlPct: d.dailyPnlPct,
-      grossExposure: d.grossExposure,
-      netExposure: d.netExposure,
-      leverage: d.leverage,
-      marginUsedPercent: d.marginUsedPercent,
-      atRisk: d.atRisk,
-      riskPct: d.riskPct,
-      riskLabel: d.riskLabel,
-      liquidationAt: d.liquidationAt,
-      cashPct: d.cashPct,
-      peakNav: peakNav(next.fund),
-    });
-  },
-  closePosition: (id: string) => {
-    const { fund, companies } = get();
-    const pos = fund.positions.find((p) => p.id === id);
-    const price = pos ? companies[pos.ticker]?.price ?? 0 : 0;
-    const updated = closePosition(fund, id, price);
-    if (updated === fund) return;
-    const next = { ...get(), fund: updated };
-    const d = derive({ companies }, next.fund);
-    set({
-      fund: next.fund,
-      nav: d.nav,
-      cash: d.cash,
-      availCash: d.availCash,
-      unrealizedPnL: d.unrealizedPnL,
-      dailyPnl: d.dailyPnl,
-      dailyPnlPct: d.dailyPnlPct,
-      grossExposure: d.grossExposure,
-      netExposure: d.netExposure,
-      leverage: d.leverage,
-      marginUsedPercent: d.marginUsedPercent,
-      atRisk: d.atRisk,
-      riskPct: d.riskPct,
-      riskLabel: d.riskLabel,
-      liquidationAt: d.liquidationAt,
-      cashPct: d.cashPct,
-      peakNav: peakNav(next.fund),
-    });
-  },
   poll: async () => {
     try {
       const { phase, token, roomCode, priceHistory, navHistory, rivalHistory, contested, confrontation, rivalDecisionKey } = get();
