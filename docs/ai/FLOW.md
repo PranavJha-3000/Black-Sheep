@@ -16,7 +16,7 @@ Entry: `server/world.ts → startWorldLoop()` → `setInterval(5s)` → `tickAll
 Assumptions: single server process (in-memory `worlds` map is truth between snapshots); a rebuild can lose ≤2 ticks of drift.
 Side effects: Postgres writes; one Anthropic call per rival decision (when key present).
 Fragile: Express 4 async routes need `wrap()`; the world clock keeps running through per-room errors (logged, not thrown).
-Watch: `liquidatePlayerFunds` runs inside the room lock (serialized with trades/ticks); a player closing their tab CANNOT dodge liquidation — it is evaluated and persisted entirely server-side.
+Watch: `liquidatePlayerFunds` runs inside the room lock (serialized with ticks and rival decisions; there are no human trades since Stage 1); a player closing their tab CANNOT dodge liquidation — it is evaluated and persisted entirely server-side.
 
 ## Room lifecycle (REST)
 Entry: `server/rooms.ts`
@@ -30,24 +30,8 @@ Assumptions: caller holds a valid bearer token; room code uppercase-normalized.
 Side effects: reads only (except join/create).
 Fragile: the state endpoint intentionally omits other funds' positions/cash — do not "helpfully" add them back; that's the design pillar.
 
-## Game tick (client-only, Phases 1-2; replaced by the server in Phase 4)
-Entry: `src/components/Terminal.tsx` → `setInterval` → `gameStore.tick()`
-
-1. `tick()` — early-return if `liquidated`
-2. `tickMarket(prev)` — price evolution (pure; `recentFlow` threaded through)
-3. `maybeFireScriptedEvent` / `generateEvent` → `applyEvent` — seeded, deterministic
-4. **Rival decision gate** — every `RIVAL_DECISION_TICKS` (10) ticks, not already thinking, `positions.length < 6`
-5. `buildDecisionInput` → `shouldRivalReconsider` guard → fire `makeLLMDecision` (non-awaited, `rivalThinking` gates re-entry)
-6. Resolution (async, re-reads current state): abort if `liquidated || !rivalThinking`; `applyTrade` (rival moves price); `applyRivalDecision` (shared engine); `detectConfrontation` (gated on EXECUTED actions; `opposite` deduped per episode, `rival_win` re-fires) → `confrontation` + `contested` state
-7. Player state re-derived (rival trades must not leave player NAV stale)
-8. `set({...})` — single trailing state write per tick
-
-Assumptions: JS single thread — tick and resolution never interleave mid-function.
-Side effects: LLM call (cost), rival portfolio, market prices, flow log.
-Fragile: the two long `set({...})` calls are one-line-per-field — edits there are where mangles have happened.
-
-## LLM call with fallback (shared by client + server)
-Entry: `packages/engine/src/rivalLLM.ts → makeLLMDecision(input, endpoint?)`
+## LLM call with fallback (server only)
+Entry: `packages/engine/src/rivalLLM.ts → makeLLMDecision(input, endpoint)` — `endpoint` is required; the only caller is `server/world.ts`
 
 1. Build body (`claude-sonnet-4-6`, `max_tokens: 300`, `RIVAL_SYSTEM_PROMPT`, user message from `buildRivalUserMessage`)
 2. `fetch(endpoint.url)` — server only: direct Anthropic URL with `x-api-key` header (the endpoint is a required argument; the browser proxy was removed in Stage 1)

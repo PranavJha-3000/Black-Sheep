@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useGameStore } from './gameStore';
 
 // NOTE (Phase 4): the old integration tests drove the REMOVED local tick loop
@@ -11,6 +11,11 @@ import { useGameStore } from './gameStore';
 describe('rival integration (store wiring)', () => {
   beforeEach(() => {
     useGameStore.getState().restart();
+  });
+
+  // Runs even when an assertion fails, so a seeded session never leaks into later tests.
+  afterEach(() => {
+    localStorage.clear();
   });
 
   it('seeds an offline contrarian rival shell at starting capital', () => {
@@ -57,6 +62,5 @@ describe('rival integration (store wiring)', () => {
     const { useGameStore: fresh } = await import('./gameStore');
     expect(fresh.getState().token).toBe('t');
     expect(fresh.getState().roomCode).toBe('ABC234');
-    localStorage.clear();
   });
 });
