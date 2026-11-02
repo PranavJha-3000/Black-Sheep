@@ -206,3 +206,17 @@ describe('compareArms baselines (review I-3)', () => {
     expect(g.vsBaseline).toEqual({ meanDiff: expect.closeTo(0.1, 10), wins: 1, pairs: 1 });
   });
 });
+
+describe('policy funds survive their own market (D-034)', () => {
+  it('the aggressive and quant policies are not margin-liquidated in seeded 2000-tick worlds', () => {
+    // Before D-034 they were liquidated in 38 of 40 such runs, mostly by one short in HELX, CURA or ORBL.
+    let liquidated = 0;
+    for (const directorMode of ['none', 'rule'] as const) {
+      for (let seed = 1; seed <= 10; seed++) {
+        const r = simulateWorld({ ...base, directorMode, ticks: 2000 }, seed);
+        liquidated += r.funds.filter((f) => f.key !== 'sterling-vale' && f.liquidated).length;
+      }
+    }
+    expect(liquidated).toBeLessThanOrEqual(2);
+  });
+});

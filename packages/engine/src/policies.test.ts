@@ -108,10 +108,32 @@ describe('decideByPolicy', () => {
     });
 
     it('fades the most overextended gainer when there is no bad news', () => {
-      let m = move(flatMarket(), 'ORBL', 0.04);
-      m = move(m, 'NOVA', 0.06);
+      let m = move(flatMarket(), 'TITAN', 0.04);
+      m = move(m, 'VOLT', 0.06);
       const d = decideByPolicy(AGGRESSIVE, input(fresh('aggressive'), m));
-      expect(d).toMatchObject({ action: 'short', ticker: 'NOVA' });
+      expect(d).toMatchObject({ action: 'short', ticker: 'VOLT' });
+    });
+
+    it('never shorts a name volatile enough to gap to a margin call between decisions', () => {
+      // HELX (vol 0.06) has the worst news and NOVA (0.035) the biggest run-up; TITAN (0.02) is calm.
+      const events: MarketEvent[] = [
+        { id: 'e1', type: 'company', ticker: 'HELX', headline: 'trial fails', priceImpactPercent: -20, timestamp: 19 },
+        { id: 'e2', type: 'company', ticker: 'TITAN', headline: 'recall', priceImpactPercent: -5, timestamp: 18 },
+      ];
+      expect(decideByPolicy(AGGRESSIVE, input(fresh('aggressive'), flatMarket(), events))).toMatchObject({ action: 'short', ticker: 'TITAN' });
+      const runUp = move(move(flatMarket(), 'NOVA', 0.1), 'HELX', 0.2);
+      expect(decideByPolicy(AGGRESSIVE, input(fresh('aggressive'), runUp)).action).toBe('hold');
+    });
+
+    it('cuts the worst losing short before banking a winner', () => {
+      const m0 = flatMarket();
+      // Book order PULSE, VOLT, TITAN: the first stopped position is not the worst one.
+      let f = holding(fresh('aggressive'), 'PULSE', 'short', m0);
+      f = holding(f, 'VOLT', 'short', m0);
+      f = holding(f, 'TITAN', 'short', m0);
+      // PULSE paid out; VOLT is past its stop; TITAN is further past it.
+      const m = move(move(move(m0, 'PULSE', -0.15), 'VOLT', 0.1), 'TITAN', 0.17);
+      expect(decideByPolicy(AGGRESSIVE, input(f, m))).toMatchObject({ action: 'close', ticker: 'TITAN' });
     });
 
     it('covers a short that has paid out', () => {
@@ -125,8 +147,21 @@ describe('decideByPolicy', () => {
   describe('quant (CROWN MERIDIAN)', () => {
     it('follows the strongest flow relative to liquidity', () => {
       // HELX is the thinnest name, so $2M there outweighs $5M in APXB.
-      const d = decideByPolicy(QUANT, input(fresh('quant'), flatMarket(), [], { HELX: -2_000_000, APXB: 5_000_000 }));
-      expect(d).toMatchObject({ action: 'short', ticker: 'HELX' });
+      const d = decideByPolicy(QUANT, input(fresh('quant'), flatMarket(), [], { HELX: 2_000_000, APXB: 5_000_000 }));
+      expect(d).toMatchObject({ action: 'buy', ticker: 'HELX' });
+    });
+
+    it('follows selling into a short only in a calm name', () => {
+      // HELX's selling is the stronger signal, but HELX is too volatile to short safely.
+      const d = decideByPolicy(QUANT, input(fresh('quant'), flatMarket(), [], { HELX: -2_000_000, APXB: -5_000_000 }));
+      expect(d).toMatchObject({ action: 'short', ticker: 'APXB' });
+    });
+
+    it('stops out a loser even while flow still agrees with it', () => {
+      const m0 = flatMarket();
+      const f = holding(fresh('quant'), 'TITAN', 'short', m0);
+      const d = decideByPolicy(QUANT, input(f, move(m0, 'TITAN', 0.13), [], { TITAN: -1_000_000 }));
+      expect(d).toMatchObject({ action: 'close', ticker: 'TITAN' });
     });
 
     it('ignores flow below the noise floor', () => {
@@ -145,7 +180,7 @@ describe('decideByPolicy', () => {
   it('never sizes a new position above the fund maxPositionFraction of available cash', () => {
     const cases: [FundProfile, RivalDecisionInput][] = [
       [CAUTIOUS, input(fresh('cautious'), move(flatMarket(), 'PULSE', -0.03))],
-      [AGGRESSIVE, input(fresh('aggressive'), move(flatMarket(), 'NOVA', 0.06))],
+      [AGGRESSIVE, input(fresh('aggressive'), move(flatMarket(), 'VOLT', 0.06))],
       [QUANT, input(fresh('quant'), flatMarket(), [], { NOVA: 9_000_000 })],
     ];
     for (const [p, i] of cases) {

@@ -10,9 +10,12 @@
  *   cautious   - take profit / stop loss, else buy the deepest low-vol dip
  *   aggressive - cover winners / stop losers, else short bad news or the most
  *                overextended gainer
- *   quant      - exit when flow turns against a position, else follow the
- *                strongest flow relative to liquidity
+ *   quant      - stop losers, exit when flow turns against a position, else
+ *                follow the strongest flow relative to liquidity
  *   contrarian - the original crowd-fade twin (makeRandomDecision)
+ *
+ * No policy shorts a name more volatile than POLICY_MAX_SHORT_VOLATILITY: it
+ * could gap past the margin limit between two decisions.
  *
  * Whatever the policy, a new position never exceeds the fund's
  * maxPositionFraction of min(NAV, available cash), and the book's gross
@@ -28,6 +31,8 @@ import {
   POLICY_AGGRESSIVE_EVENT_IMPACT,
   POLICY_AGGRESSIVE_EXTENDED,
   POLICY_AGGRESSIVE_STOP_LOSS,
+  POLICY_MAX_SHORT_VOLATILITY,
+  POLICY_QUANT_STOP_LOSS,
   POLICY_AGGRESSIVE_TAKE_PROFIT,
   POLICY_CAUTIOUS_DIP,
   POLICY_CAUTIOUS_MAX_VOLATILITY,
@@ -115,24 +120,39 @@ function returnOf(input: RivalDecisionInput, pos: Position): number | undefined 
   return positionPnl(pos, price) / basis;
 }
 
-/** First position that hit its profit target or stop, as a close decision. */
+/**
+ * One close per decision, so a stop always wins over a profit target and the
+ * worst loss is cut first: banking a winner while a loser runs toward a margin
+ * call is how a fund gets liquidated between two decisions.
+ */
 function exitOnTarget(input: RivalDecisionInput, takeProfit: number, stopLoss: number): RivalDecision | null {
+  let worst: { pos: Position; r: number } | null = null;
+  let winner: { pos: Position; r: number } | null = null;
   for (const pos of input.ownFund.positions) {
     const r = returnOf(input, pos);
     if (r === undefined) continue;
-    const pct = `${(r * 100).toFixed(1)}%`;
-    if (r >= takeProfit) {
-      return { action: 'close', ticker: pos.ticker, reasoning: `${pos.ticker} ${pos.direction} is up ${pct}; banking it.`, confidence: 0.75 };
-    }
-    if (r <= -stopLoss) {
-      return { action: 'close', ticker: pos.ticker, reasoning: `${pos.ticker} ${pos.direction} is down ${pct}; stop hit, cutting it.`, confidence: 0.8 };
-    }
+    if (r <= -stopLoss && (!worst || r < worst.r)) worst = { pos, r };
+    if (r >= takeProfit && !winner) winner = { pos, r };
+  }
+  if (worst) {
+    const { pos, r } = worst;
+    return { action: 'close', ticker: pos.ticker, reasoning: `${pos.ticker} ${pos.direction} is down ${(r * 100).toFixed(1)}%; stop hit, cutting it.`, confidence: 0.8 };
+  }
+  if (winner) {
+    const { pos, r } = winner;
+    return { action: 'close', ticker: pos.ticker, reasoning: `${pos.ticker} ${pos.direction} is up ${(r * 100).toFixed(1)}%; banking it.`, confidence: 0.75 };
   }
   return null;
 }
 
 function held(input: RivalDecisionInput, ticker: Ticker): boolean {
   return input.ownFund.positions.some((p) => p.ticker === ticker);
+}
+
+/** Calm enough to short: cannot plausibly gap to a margin call between two decisions. */
+function shortable(input: RivalDecisionInput, ticker: Ticker): boolean {
+  const company = input.companies.find((c) => c.ticker === ticker);
+  return company !== undefined && company.volatility <= POLICY_MAX_SHORT_VOLATILITY;
 }
 
 // ---------------------------------------------------------------------------
@@ -162,7 +182,7 @@ function aggressive(input: RivalDecisionInput, profile: FundProfile): RivalDecis
   if (exit) return exit;
 
   const badNews = input.events
-    .filter((e) => e.ticker && e.priceImpactPercent <= POLICY_AGGRESSIVE_EVENT_IMPACT && !held(input, e.ticker))
+    .filter((e) => e.ticker && e.priceImpactPercent <= POLICY_AGGRESSIVE_EVENT_IMPACT && !held(input, e.ticker) && shortable(input, e.ticker))
     .sort((a, b) => a.priceImpactPercent - b.priceImpactPercent)[0];
   if (badNews?.ticker) {
     return {
@@ -175,7 +195,7 @@ function aggressive(input: RivalDecisionInput, profile: FundProfile): RivalDecis
   }
 
   const extended = input.companies
-    .filter((c) => c.changePct >= POLICY_AGGRESSIVE_EXTENDED && !held(input, c.ticker))
+    .filter((c) => c.changePct >= POLICY_AGGRESSIVE_EXTENDED && !held(input, c.ticker) && shortable(input, c.ticker))
     .sort((a, b) => b.changePct - a.changePct)[0];
   if (extended) {
     return {
@@ -190,6 +210,10 @@ function aggressive(input: RivalDecisionInput, profile: FundProfile): RivalDecis
 }
 
 function quant(input: RivalDecisionInput, profile: FundProfile): RivalDecision {
+  // The flow signal says nothing about a gap; the stop does.
+  const stop = exitOnTarget(input, Infinity, POLICY_QUANT_STOP_LOSS);
+  if (stop) return stop;
+
   for (const pos of input.ownFund.positions) {
     const flow = input.netFlow[pos.ticker] ?? 0;
     const against = pos.direction === 'long' ? flow <= -POLICY_QUANT_MIN_FLOW : flow >= POLICY_QUANT_MIN_FLOW;
@@ -203,7 +227,7 @@ function quant(input: RivalDecisionInput, profile: FundProfile): RivalDecision {
       const flow = input.netFlow[c.ticker] ?? 0;
       return { ticker: c.ticker, flow, strength: Math.abs(flow) / Math.max(1, c.liquidity) };
     })
-    .filter((s) => Math.abs(s.flow) >= POLICY_QUANT_MIN_FLOW && !held(input, s.ticker))
+    .filter((s) => Math.abs(s.flow) >= POLICY_QUANT_MIN_FLOW && !held(input, s.ticker) && (s.flow > 0 || shortable(input, s.ticker)))
     .sort((a, b) => b.strength - a.strength);
   const best = ranked[0];
   if (!best) return hold('No flow signal above the noise floor.');
