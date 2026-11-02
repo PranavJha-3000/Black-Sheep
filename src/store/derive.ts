@@ -1,4 +1,5 @@
-import { markToMarket, getExposure, checkLiquidation, availableCash, positionPnl } from '@black-sheep/engine/portfolio';
+import { markToMarket, getExposure, checkLiquidation, availableCash } from '@black-sheep/engine/portfolio';
+import { MAINTENANCE_MARGIN_RATE } from '../../config/game';
 import type { Fund } from '@black-sheep/engine/portfolio';
 import type { Company, Ticker } from '@black-sheep/engine/types';
 
@@ -38,16 +39,9 @@ export function derive(market: { companies: Record<Ticker, Company> }, fund: Fun
       : clampN((e.grossExposure / Math.max(r.nav, 1)) * 55 + marginTerm + shortShare * 10, 0, 100);
   const riskLabel: RiskLabel = riskPct < 25 ? 'LOW' : riskPct < 55 ? 'MODERATE' : riskPct < 80 ? 'HIGH' : 'CRITICAL';
 
-  let tma = 0;
-  let tmm = 0;
-  for (const p of fund.positions) {
-    if (p.direction !== 'short') continue;
-    const px = mkt.companies[p.ticker]?.price ?? 0;
-    tma += p.marginReserved + positionPnl(p, px);
-    tmm += 0.25 * px * p.quantity;
-  }
+  // Liquidation is when NAV falls to the maintenance requirement on the shorts (D-035).
   const hasShort = fund.positions.some((pp) => pp.direction === 'short');
-  const liqAt = hasShort ? Math.max(0, r.nav - Math.max(tma - tmm, 0)) : Math.max(0, r.nav * 0.25);
+  const liqAt = hasShort ? MAINTENANCE_MARGIN_RATE * shortGross : Math.max(0, r.nav * 0.25);
 
   // Against THIS fund's starting capital (the server seeds rooms with $10M).
   const pnl = r.nav - fund.startingCapital;

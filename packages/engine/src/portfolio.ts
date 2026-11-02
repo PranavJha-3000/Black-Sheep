@@ -249,51 +249,36 @@ export function getExposure(
  * but you owe the shares back later. To make sure you can cover this
  * obligation, you must post "margin" - collateral that the broker holds.
  *
- * The INITIAL margin (50%) is what you post when opening the short.
- * The MAINTENANCE margin (25%) is the minimum equity that must remain in
- * your margin account. If the stock price rises, your short loses money,
- * and your margin account shrinks. If it falls below the maintenance margin,
- * the broker issues a margin call - you must deposit more cash or the
- * position is liquidated (force-closed) to protect the broker.
+ * The INITIAL margin (50%) is what you post when opening the short; it is
+ * locked out of availableCash so a fund cannot open more than it can back.
  *
- * For each short position:
- *   marginAccount = marginReserved + unrealizedPnL
- *   maintenanceMargin = MAINTENANCE_MARGIN_RATE * currentPrice * quantity
+ * The MAINTENANCE margin (25% of the shorts' CURRENT value) is the minimum
+ * equity the whole account must keep. Every dollar the fund owns counts as
+ * collateral - free cash and long positions as well as the posted margin -
+ * because a broker would call for more margin before force-closing, and a
+ * fund with free cash would post it (D-035). So:
  *
- * At the fund level:
- *   totalMarginAccount = sum of marginAccount for all shorts
- *   totalMaintenanceMargin = sum of maintenanceMargin for all shorts
+ *   equity            = NAV = cash + longs - shorts (all at market)
+ *   maintenanceMargin = MAINTENANCE_MARGIN_RATE * sum(currentPrice * quantity) over shorts
  *
- * atRisk = totalMarginAccount < totalMaintenanceMargin
- * marginUsedPercent = (totalMaintenanceMargin / totalMarginAccount) * 100
- *   (values > 100% mean the fund is at risk)
+ * atRisk = equity < maintenanceMargin
+ * marginUsedPercent = (maintenanceMargin / equity) * 100
+ *   (values > 100% mean the fund is at risk; Infinity when equity <= 0)
+ *
+ * A fund with no shorts is never at risk: longs are fully paid for.
  */
 export function checkLiquidation(
   fund: Fund,
   market: MarketState,
 ): { atRisk: boolean; marginUsedPercent: number; message: string } {
-  let totalMarginAccount = 0;
-  let totalMaintenanceMargin = 0;
-
+  let maintenanceMargin = 0;
   for (const pos of fund.positions) {
     if (pos.direction !== 'short') continue;
-
     const currentPrice = market.companies[pos.ticker]?.price ?? 0;
-    const unrealizedPnL = positionPnl(pos, currentPrice);
-
-    // Margin account = initial margin posted + unrealized P&L
-    // As price rises, unrealized P&L becomes negative, shrinking the account
-    const marginAccount = pos.marginReserved + unrealizedPnL;
-
-    // Maintenance margin is based on CURRENT notional (not entry notional)
-    // because the broker cares about current exposure
-    const maintenanceMargin = MAINTENANCE_MARGIN_RATE * currentPrice * pos.quantity;
-
-    totalMarginAccount += marginAccount;
-    totalMaintenanceMargin += maintenanceMargin;
+    maintenanceMargin += MAINTENANCE_MARGIN_RATE * currentPrice * pos.quantity;
   }
 
-  if (totalMaintenanceMargin === 0) {
+  if (maintenanceMargin === 0) {
     return {
       atRisk: false,
       marginUsedPercent: 0,
@@ -301,14 +286,13 @@ export function checkLiquidation(
     };
   }
 
-  const marginUsedPercent = totalMarginAccount > 0
-    ? (totalMaintenanceMargin / totalMarginAccount) * 100
-    : Infinity;
-  const atRisk = totalMarginAccount < totalMaintenanceMargin;
+  const equity = markToMarket(fund, market).nav;
+  const marginUsedPercent = equity > 0 ? (maintenanceMargin / equity) * 100 : Infinity;
+  const atRisk = equity < maintenanceMargin;
 
   const message = atRisk
-    ? `LIQUIDATION RISK: Margin equity $${totalMarginAccount.toFixed(2)} below maintenance requirement $${totalMaintenanceMargin.toFixed(2)}. Deposit cash or close positions.`
-    : `Margin healthy: $${totalMarginAccount.toFixed(2)} equity vs $${totalMaintenanceMargin.toFixed(2)} maintenance required.`;
+    ? `LIQUIDATION RISK: Equity $${equity.toFixed(2)} below maintenance requirement $${maintenanceMargin.toFixed(2)}. Deposit cash or close positions.`
+    : `Margin healthy: $${equity.toFixed(2)} equity vs $${maintenanceMargin.toFixed(2)} maintenance required.`;
 
   return { atRisk, marginUsedPercent, message };
 }
