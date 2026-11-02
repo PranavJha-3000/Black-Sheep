@@ -5,6 +5,7 @@
 |---|---|---|
 | `packages/engine` (`@black-sheep/engine`) | THE shared pure engine: market evolution/impact/flow, portfolio lifecycle, events, rival shell + LLM brain. UI-free, imported by client AND server | nothing |
 | `config/funds.ts`, `config/models.ts` | Literal-only registries: the AI funds (identity, mandate, strategy, model, risk limit, cadence slot) and the models they may use (pricing, effort). Dependency-free so the engine can import them | nothing |
+| `packages/engine/src/memory.ts` | Pure memory rules: episodes, reflections, relationship notes, prompt selection, `recall_memory` filtering | config |
 | `packages/engine/src/fundTools.ts` | Pure fund research tools (`FUND_TOOLS`, `runFundTool`) and `submit_decision` parsing | engine |
 | `packages/engine/src/funds.ts`, `policies.ts` | Typed `FundProfile` view of the registry; per-personality deterministic fallback policies and `enforceRiskLimit` | config |
 | `server/db.ts` | PrismaClient singleton | @prisma/client |
@@ -15,7 +16,7 @@
 | `server/providers/anthropic.ts` | The only provider adapter: `@anthropic-ai/sdk` beta messages call + the bounded tool loop `runDecisionLoop` (metered, never throws) | SDK, engine fundTools, budget |
 | `server/worldRoutes.ts` | `GET /world/state` — public, no auth; builds the payload via `buildWorldStatePayload` | db, world, worldCore |
 | `server/index.ts` | Express app, routes (`/auth`, `/world`), error handler, world clock start | all server modules |
-| `prisma/schema.prisma` | Postgres schema: User, World, Fund, Position, MarketTick, MarketEventLog, RivalDecisionLog (+ source/model/llmCallId), LiquidationLog, LlmCallLog, ToolCallLog. Init migration in `prisma/migrations/20261102000000_init` | @prisma/client |
+| `prisma/schema.prisma` | Postgres schema: User, World, Fund, Position, MarketTick, MarketEventLog, RivalDecisionLog (+ source/model/llmCallId), LiquidationLog, LlmCallLog, ToolCallLog, AgentMemory. Init migration in `prisma/migrations/20261102000000_init` | @prisma/client |
 | `src/store/gameStore.ts` | Read-only zustand projection of public `GET /world/state` (polled every 2.5s); focuses the lowest-id fund and summarises every fund (`funds`) for `FundsStrip`; no auth, lobby, local simulation or trading | engine, server API |
 | `src/components/*` | Terminal UI (Hero, Mid, RivalPanel = FUND INTEL, FundSummaryPanel, PositionRow…). `App` renders only `<Terminal/>` | gameStore |
 | `scripts/verify-backend.ps1` | One-command backend acceptance test (db → migrate → server → unattended tick growth) | docker, prisma, server |

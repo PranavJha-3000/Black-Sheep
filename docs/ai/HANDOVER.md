@@ -1,8 +1,8 @@
 # Handover
 
 ## Current state
-- Working: **Stage 4 decision cycle complete** (branch `feat/stage4-decision-cycle`). Funds research with five pure read-only tools and submit through a bounded, metered tool loop in the server-only `@anthropic-ai/sdk` adapter (D-023, D-024); every call reserves its worst case against a $2/fund and $10 global daily budget with ≤2 calls in flight, is logged with tokens/cost/tools, and every decision records its source (D-025). FundsStrip shows spend vs budget and source. Stages 1–3 are merged to `main`.
-- In progress: nothing. Stage 5 (persistent agent memory) is next.
+- Working: **Stage 5 agent memory complete** (branch `feat/stage5-agent-memory`). Each registered fund remembers its filled trades, closes and liquidation (episodic), summarises every 3 closes (reflective) and notes other funds' public moves on its book (relationship); memory persists in `AgentMemory`, is shown in the decision prompt and through `recall_memory`, and observers see the 5 newest per fund (D-026). Memory is not learning — no model or policy changes. Stages 1–4 are merged to `main`.
+- In progress: nothing. Stage 6 (observer UI) is next.
 - Broken: nothing known — typecheck, tests, lint and build green. Live-DB and live-provider behaviour UNVERIFIED (no Postgres, no key used).
 - Avoid: Do not duplicate engine logic — import `@black-sheep/engine/*`. Every async Express route goes through `wrap()`. Prisma pinned to v6. Never call an LLM from the browser (VISION §14.9). Every field added to `buildWorldStatePayload` is public. Run ONE server process per DB. A fund's identity is its registry `name` — renaming an entry starts a new fund.
 
@@ -24,6 +24,12 @@
 - [ ] Live-DB verification still blocked on WSL/Docker (`wsl --install -d Ubuntu`, reboot, then `scripts/verify-backend.ps1`). The init migration exists; run `npx prisma migrate deploy` (not `migrate dev --name init`, which would create a second migration) on first DB boot.
 
 ## Log
+
+### 2026-11-02 · Claude Opus 5.5 (Claude Code) · Stage 5 agent memory
+CHANGED: Engine `memory.ts` (episodes, reflections, relationship notes, `selectMemories`, `recallMemory`); `RivalDecisionInput.memory`; prompt memory section; `recall_memory` tool. Server: `AgentMemory` model + migration `20261102030000_agent_memory`; `loadMemory` on boot, `remember`/`rememberDecision` after each applied decision and on liquidation; `/world/state` `funds[].memory` (5 newest).
+WHY: VISION §6 (EXPERIENCE → REMEMBER → REFLECT), §7, §9. See D-026.
+VERIFY: `npm run typecheck` 0, `npm test` 177/177, `npm run lint` 0, `npm run build` ✓, `npx prisma validate` ✓, migration generated offline with `prisma migrate diff`.
+NOT VERIFIED: migration apply, memory rows written/reloaded on a real DB; any live model reading its memory.
 
 ### 2026-11-02 · Claude Opus 5.5 (Claude Code) · Stage 4 decision cycle
 CHANGED: Engine `fundTools.ts` (5 tools, pure handlers) and a pure `rivalLLM.ts` (prompt + parsing only); server `budget.ts` (pricing + `BudgetLedger`) and `providers/anthropic.ts` (SDK adapter + bounded tool loop); migration `20261102020000_decision_metering` (`LlmCallLog`, `ToolCallLog`, `RivalDecisionLog.source/model/llmCallId`); `world.ts` decides via `chooseDecision` (policy / budget / llm) and seeds the ledger from today's spend; `/world/state` exposes per-fund `spend` and decision `source`/`model`; FundsStrip shows them. New dep `@anthropic-ai/sdk`.

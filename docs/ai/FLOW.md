@@ -6,11 +6,11 @@ Entry: `server/world.ts → startWorldLoop()` → `setInterval(5s)` → `ensureL
 1. `ensureLiveWorld()` (first call only): find the `World` row named `live`, or create it with `resolveWorldSeed(null, env.WORLD_SEED, WORLD_SEED)`. An existing row keeps its seed; a different `WORLD_SEED` env logs a warning (D-018). Upsert every `FUND_REGISTRY` fund missing from the world (`missingRegistryFunds`, matched by name, $10M each). Rebuild from the latest `MarketTick.snapshotJson` via `parseWorldSnapshot` (corrupt → throws, the tick is skipped and logged) then `addMissingCompanies`, or bootstrap `createInitialMarket()` + `initialScheduler()`. Build one `Agent` per fund whose name is in the registry (`liquidated` from `Fund.liquidated`); other funds are observed only.
 2. `tickMarket(market, seed)` → `maybeFireScriptedEvent`/`generateEvent` → `applyEvent`
 3. `trackPeakNav(w)` — compute NAV for every fund at new prices; update `Fund.peakNav` if a new all-time high
-4. `liquidateFunds(w)` — for **every** non-liquidated fund with open positions: reconstruct the engine Fund, `checkLiquidation`. If `atRisk`: force-close all positions at market, `Fund.liquidated = true`, `deriveCauseOfDeath`, `LiquidationLog` (`rivalContext: null`) — one transaction. If the fund has an agent, `agent.liquidated = true`.
+4. `liquidateFunds(w)` — for **every** non-liquidated fund with open positions: reconstruct the engine Fund, `checkLiquidation`. If `atRisk`: force-close all positions at market, `Fund.liquidated = true`, `deriveCauseOfDeath`, `LiquidationLog` (`rivalContext: null`) — one transaction. If the fund has an agent, `agent.liquidated = true` and a liquidation episode is remembered.
 5. Event fired? → `MarketEventLog` row
 6. `tickCount % 3 === 0`? → `MarketTick` row (`snapshotJson`)
 7. For each agent: `shouldFundDecide(tickCount, agent.pending, agent.liquidated, every, offset)` (its own slot, one call in flight per fund, never when liquidated) → fire `decideFund(w, agent)` non-blocking
-8. `decideFund`: `buildDecisionInput` → `chooseDecision` (see "Fund decision cycle") OUTSIDE the lock → `enforceRiskLimit` → inside `withWorldLock`: drop the decision if the fund was liquidated meanwhile; else `applyTrade` → `applyRivalDecision` → persist in ONE transaction: Fund.cash + added/removed Positions + `RivalDecisionLog` row (`source`, `model`, `llmCallId`)
+8. `decideFund`: `buildDecisionInput` + `memory: agent.memory` → `chooseDecision` (see "Fund decision cycle") OUTSIDE the lock → `enforceRiskLimit` → inside `withWorldLock`: drop the decision if the fund was liquidated meanwhile; else `applyTrade` → `applyRivalDecision` → persist in ONE transaction: Fund.cash + added/removed Positions + `RivalDecisionLog` row (`source`, `model`, `llmCallId`) → `rememberDecision` (see "Agent memory")
 
 Assumptions: single server process (the in-memory world is truth between snapshots); a rebuild can lose ≤2 ticks of drift.
 Side effects: Postgres writes; at most one Anthropic decision (≤ 4 rounds) per fund slot, only with a key, a material change and budget headroom.
@@ -41,3 +41,17 @@ Entry: `server/world.ts → decideFund(w, agent)` → `chooseDecision(w, agent, 
 Assumptions: one server process (the ledger is in-memory, re-seeded on boot from today's `LlmCallLog`).
 Side effects: provider calls (billed), `LlmCallLog`/`ToolCallLog` writes.
 Fragile: if a model ID in `config/models.ts` is retired every call errors and funds play policies — check `LlmCallLog.outcome = 'error'`. The cost estimate assumes `DECISION_PROMPT_TOKENS_ESTIMATE` (3000) input tokens per round.
+
+## Agent memory (server only, D-026)
+Entry: `server/world.ts → rememberDecision(w, agent, after)` (inside the world lock, after the decision persists) and `liquidateFunds` (liquidation episode)
+
+1. `episodeFromDecision(after, nav, tick)` — null for holds and unfilled trades (nothing is remembered).
+2. A close episode → `reflect([...agent.memory, episode], tick)` — a reflection once 3 closes accumulate since the last one.
+3. `remember(w, agent, entries)` — append to `agent.memory` (cap 40), `prisma.agentMemory.createMany`; errors are logged, never thrown.
+4. For every other live agent: `relationshipNote(other.fund.positions, agent.profile.name, after.lastDecision, tick)` — only when the move is a filled open on a ticker that fund holds.
+5. Next decision: `buildRivalUserMessage` shows `selectMemories(memory, 6)`; the `recall_memory` tool reads the same array.
+6. Boot: `loadMemory(fundId)` — the newest 40 rows, oldest first.
+
+Assumptions: one server process (memory is cached in process).
+Side effects: `AgentMemory` writes; no provider calls.
+Fragile: memory text is shown verbatim to the model and to observers — keep it free of other funds' sizes (D-017).

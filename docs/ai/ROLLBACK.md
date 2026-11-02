@@ -1,5 +1,12 @@
 # Rollback
 
+## Stage 5 agent memory · 2026-11-02
+Safe commit: `0d5337a` (main). Work lives on branch `feat/stage5-agent-memory`.
+Revert with: `git switch main` (branch unmerged), or after merge `git revert -m 1 <merge commit>`.
+Files touched: `config/game.ts`, `packages/engine/src/{memory (new),rival,rivalLLM,fundTools}.ts` + tests, `server/{world,worldCore}.ts`, `server/worldCore.test.ts`, `prisma/schema.prisma`, `prisma/migrations/20261102030000_agent_memory/` (new), `docs/**`.
+Non-code changes to undo: migration `20261102030000_agent_memory` creates table `AgentMemory`. It has never been applied (no DB). If applied, reverted code ignores the table; to drop it: `DROP TABLE "AgentMemory";` and delete its `_prisma_migrations` row — or `docker compose down -v` (DESTROYS all world data). Never edit the applied migration.
+Re-check after rollback: `npm run typecheck`; `npm test`; `npm run lint`; `npm run build`.
+
 ## Stage 4 decision cycle · 2026-11-02
 Safe commit: `557fc28` (main). Work lives on branch `feat/stage4-decision-cycle`.
 Revert with: `git switch main` (branch unmerged), or after merge `git revert -m 1 <merge commit>`, then `npm install` to drop `@anthropic-ai/sdk`.
