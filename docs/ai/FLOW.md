@@ -1,34 +1,33 @@
 # Execution Flow
 
-## Server world tick (Phase 3 — the world moves unattended)
-Entry: `server/world.ts → startWorldLoop()` → `setInterval(5s)` → `tickAllActiveRooms()`
+## Server world tick (the world moves unattended)
+Entry: `server/world.ts → startWorldLoop()` → `setInterval(5s)` → `ensureLiveWorld()` → `withWorldLock(() => tickWorld(w))`
 
-1. `prisma.room.findMany({ status: 'active' })`
-2. Per room: `worlds.get(id) ?? ensureWorld(id)` — rebuild from latest `MarketTick.snapshotJson` (`{market, scheduler}`) + Fund/Position rows + last `RivalDecisionLog`; or bootstrap `createInitialMarket()` + rival fund
-3. `tickMarket(market, seed)` → `maybeFireScriptedEvent`/`generateEvent` → `applyEvent`
-4. `trackPeakNav(w)` — compute NAV for every fund at new prices; update `Fund.peakNav` if a new all-time high
-5. `liquidatePlayerFunds(w)` — **server-authoritative liquidation**: for each non-rival, non-liquidated fund with open positions, reconstruct engine Fund from DB rows, run `checkLiquidation(fund, market)`. If `atRisk`: force-close all positions at market price (DB writes), mark `Fund.liquidated = true`, compute `deriveCauseOfDeath`, look for rival context via `computeRivalContext` (replays last 6 `RivalDecisionLog` entries through `detectConfrontation`), write a `LiquidationLog` row. All in one transaction.
-6. Event fired? → `MarketEventLog` row
-7. `tickCount % 3 === 0`? → `MarketTick` row (`snapshotJson`)
-8. `tickCount % 10 === 0 && !rivalPending`? → fire `decideRival()` non-blocking
-9. `decideRival`: `buildDecisionInput` → `makeLLMDecision(input, {url: api.anthropic.com, headers: x-api-key})` or `makeRandomDecision` (no key) → `applyTrade` (rival moves price) → `applyRivalDecision` (shared player engine) → persist in ONE transaction: Fund.cash + added/removed Positions + `RivalDecisionLog` row
+1. `ensureLiveWorld()` (first call only): find the `World` row named `live`, or create it with `resolveWorldSeed(null, env.WORLD_SEED, WORLD_SEED)`. An existing row keeps its seed; a different `WORLD_SEED` env logs a warning (D-018). Load the world's lowest-id fund (create `RIVAL_NAME` with $10M if none). Rebuild from the latest `MarketTick.snapshotJson` via `parseWorldSnapshot` (corrupt → throws, the tick is skipped and logged), or bootstrap `createInitialMarket()` + `initialScheduler()`. `rivalLiquidated` comes from `Fund.liquidated`.
+2. `tickMarket(market, seed)` → `maybeFireScriptedEvent`/`generateEvent` → `applyEvent`
+3. `trackPeakNav(w)` — compute NAV for every fund at new prices; update `Fund.peakNav` if a new all-time high
+4. `liquidateFunds(w)` — for **every** non-liquidated fund with open positions: reconstruct the engine Fund, `checkLiquidation`. If `atRisk`: force-close all positions at market, `Fund.liquidated = true`, `deriveCauseOfDeath`, `LiquidationLog` (`rivalContext: null`) — one transaction. If it was the deciding fund, `w.rivalLiquidated = true`.
+5. Event fired? → `MarketEventLog` row
+6. `tickCount % 3 === 0`? → `MarketTick` row (`snapshotJson`)
+7. `shouldFundDecide(tickCount, rivalPending, rivalLiquidated)` (every 10 ticks, one in flight, never when liquidated) → fire `decideRival()` non-blocking
+8. `decideRival`: `buildDecisionInput` → `makeLLMDecision(input, {url, headers})` or `makeRandomDecision` (no key) — OUTSIDE the lock → then inside `withWorldLock`: drop the decision if the fund was liquidated meanwhile; else `applyTrade` → `applyRivalDecision` → persist in ONE transaction: Fund.cash + added/removed Positions + `RivalDecisionLog` row
 
-Assumptions: single server process (in-memory `worlds` map is truth between snapshots); a rebuild can lose ≤2 ticks of drift.
-Side effects: Postgres writes; one Anthropic call per rival decision (when key present).
-Fragile: Express 4 async routes need `wrap()`; the world clock keeps running through per-room errors (logged, not thrown).
-Watch: `liquidatePlayerFunds` runs inside the room lock (serialized with ticks and rival decisions; there are no human trades since Stage 1); a player closing their tab CANNOT dodge liquidation — it is evaluated and persisted entirely server-side.
+Assumptions: single server process (the in-memory world is truth between snapshots); a rebuild can lose ≤2 ticks of drift.
+Side effects: Postgres writes; one Anthropic call per decision (when key present).
+Fragile: Express 4 async routes need `wrap()`; the clock keeps running through tick errors (logged, not thrown).
+Watch: a liquidated fund never decides again; a second server process against the same DB would double-tick the world.
 
-## Room lifecycle (REST)
-Entry: `server/rooms.ts`
+## Observer state (`GET /world/state`)
+Entry: `server/worldRoutes.ts` → `ensureLiveWorld()` → `buildWorldStatePayload` (`server/worldCore.ts`)
 
-1. `POST /auth/register|login` → bcrypt verify → JWT `{sub: userId}` (7d)
-2. `POST /rooms` (auth) → 6-char code (collision-retried) → Room + rival Fund (userId null, $10M) → `ensureWorld` warm-up
-3. `POST /rooms/:code/join` (auth) → active room check → idempotent (existing fund returned) → maxPlayers check → create Fund (named from email local-part, $10M)
-4. `GET /rooms/:code/state` (auth + membership) → market prices/tickCount, all funds `{nav, netExposure}`, OWN positions/cash/availCash, `flow` (per-ticker net flow), rival lastDecision, recentEvents
+1. No auth. Load the world's funds (id asc), each fund's open positions, latest `RivalDecisionLog`, and latest `LiquidationLog.cause` (only when liquidated); the last 10 `MarketEventLog` rows.
+2. `thinking = rivalPending && fund.id === rivalFundId`.
+3. `buildWorldStatePayload` copies only listed fields: `world {name, seed, tickCount, timestamp}`, company quotes, funds (NAV ≥ 1, exposures, positions with signed pnl, last decision), `flow` (15-tick net flow per ticker), recent events. No scheduler, RNG state or unfired events.
+4. Client: `gameStore.poll()` every 2.5s → `projectState` focuses `funds[0]` (lowest id); an empty world projects a seed fund (`fundId: null`).
 
-Assumptions: caller holds a valid bearer token; room code uppercase-normalized.
-Side effects: reads only (except join/create).
-Fragile: the state endpoint intentionally omits other funds' positions/cash — do not "helpfully" add them back; that's the design pillar.
+Assumptions: observers are humans; agents never call this.
+Side effects: reads only.
+Fragile: every field added to the payload is public — add to `buildWorldStatePayload` deliberately, and keep its leak test green.
 
 ## LLM call with fallback (server only)
 Entry: `packages/engine/src/rivalLLM.ts → makeLLMDecision(input, endpoint)` — `endpoint` is required; the only caller is `server/world.ts`

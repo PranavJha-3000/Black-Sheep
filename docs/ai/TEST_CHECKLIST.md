@@ -5,7 +5,7 @@ Run before any change counts as done.
 | # | Command | Expected |
 |---|---|---|
 | 1 | `npm run typecheck` | exits 0 — runs root tsc (src + packages) AND `tsc -p server` |
-| 2 | `npm test` | all pass — currently 82 tests across 6 files (engine tests run from `packages/`) |
+| 2 | `npm test` | all pass — currently 91 tests across 7 files (engine tests run from `packages/`) |
 | 3 | `npm run lint` | exits 0 (`--max-warnings 0`; `_`-prefixed args are ignored by convention) |
 | 4 | `npm run build` | `tsc && vite build` succeeds |
 | 5 | `npm run server:dev` (needs DB) | `[world] clock started` + `[server] listening on :3001`; `GET /health` → `{"ok":true}` |
@@ -17,9 +17,7 @@ Run before any change counts as done.
 - [ ] `powershell -ExecutionPolicy Bypass -File scripts/verify-backend.ps1 -Seconds 60` → VERDICT: PASS
 - [ ] `docker exec black-sheep-pg psql -U postgres -d black_sheep -c '\dt'` → all 7 tables exist
 - [ ] `prisma/migrations/` contains the init migration and is committed (migrations in VCS)
-- [ ] Joining twice with the same user returns `alreadyJoined: true` (idempotent)
-- [ ] Room full (maxPlayers) → 409; unknown code → 404; state without membership → 403
-- [ ] State response contains NO other player's positions or cash (aggregate `{nav, netExposure}` only)
+- ~~REMOVED Stage 2 (no rooms)~~ Joining twice returns `alreadyJoined: true`; room full → 409; unknown code → 404; state without membership → 403; state hides other players' books
 - [ ] Without `ANTHROPIC_API_KEY`, rival decisions still appear in `RivalDecisionLog` (rule-based twin)
 
 ### Rival / LLM / confrontation (Phases 1-2, client)
@@ -36,20 +34,27 @@ Run before any change counts as done.
 - ~~REMOVED Stage 1 (result cards)~~ (Needs DB) `GET /funds/:id/result-card.png` → `Content-Type: image/png`, 1200×630, dark terminal aesthetic with NAV/cause/PnL; a fund UP 300% renders just as validly as one that blew up
 - ~~REMOVED Stage 1 (result cards)~~ (Needs DB) result-card endpoints return data with NO auth token and expose NO positions/cash (firewall holds for unauthenticated viewers)
 - [ ] UI: sidebar `FundSummaryPanel` always shows NAV/PnL/positions (SHARE removed in Stage 1)
-- [ ] UI: on liquidation, `LiquidationScreen` shows the cause, the rival-context line (when present), and START AGAIN (SHARE RESULT removed in Stage 1)
+- ~~REMOVED Stage 2 (LiquidationScreen deleted; FundSummaryPanel shows `LIQUIDATED — cause`)~~ UI: on liquidation, `LiquidationScreen` shows the cause, the rival-context line (when present), and START AGAIN (SHARE RESULT removed in Stage 1)
 
 
 ### Phase 4 — frontend on the backend (this turn)
 - [ ] `npm run typecheck` / `npm test` (84/84) / `npm run lint` / `npm run build` — all green
 - ~~REMOVED Stage 1 (no human trading)~~ (Needs DB) log in as A + B in two tabs, same room: same market; A's trade moves B's tape within one poll (~2.5s)
-- [ ] (Needs DB) close tab with trading phase, reopen later: auto-resumes room, market has moved on (away-summary removed in Stage 1)
+- ~~REMOVED Stage 2 (no sessions)~~ (Needs DB) close tab with trading phase, reopen later: auto-resumes room
 - ~~REMOVED Stage 1 (no human trading)~~ (Needs DB) `POST /rooms/:code/trade` with a junk order → 400 with the engine rejection string; poll after shows no phantom position
-- [ ] State response still contains NO other player's positions or cash (aggregates only)
+- ~~REMOVED Stage 2 (observation is public, D-017)~~ State response contains NO other player's positions or cash
 
 - [ ] Without `ANTHROPIC_API_KEY`: game still runs; rival reasons with templated rule-based text
 - [ ] With a key in `.env`: RivalPanel shows "APEX CAPITAL is reviewing positions..." then a 1–2 sentence LLM thesis
 - ~~REMOVED Stage 1 (browser proxy gone)~~ `curl -X POST localhost:5173/api/llm` with a junk body → Anthropic-shaped 401/400 passthrough (NOT a Vite 404)
 - [ ] Restart mid-decision → no stale rival position resurrection
-- [ ] Confrontation: crowd a ticker → rival fades it → red banner + `⚔ APEX` on the row; close position → marker clears
+- ~~REMOVED Stage 2 (confrontation UI deleted)~~ Confrontation banner + `⚔ APEX` marker
 
-
+### Stage 2 — one global live world
+- [ ] `npm test` includes `server/worldCore.test.ts` (seed resolution, corrupt snapshot, decision cadence, payload leak/order/empty-world)
+- [ ] `git grep -nE "roomId|Room\b|/rooms|ensureWorld\(" -- server prisma/schema.prisma scripts src` → no output
+- [ ] Vite dev → the terminal renders with no login or lobby; FUND INTEL reads `NO FUND YET` until the server answers
+- [ ] (Needs DB) `npx prisma migrate deploy` applies `20261102000000_init`; `\dt` shows `World` and no `Room`
+- [ ] (Needs DB) `curl localhost:3001/world/state` with NO token → `world.name = "live"`, `funds.length >= 1`
+- [ ] (Needs DB) restart the server with a different `WORLD_SEED` env → `[world] WORLD_SEED=… ignored` warning; `world.seed` unchanged
+- [ ] (Needs DB) force a fund past maintenance margin → `Fund.liquidated = true`, `LiquidationLog.rivalContext` null, and no new `RivalDecisionLog` rows for that fund afterwards

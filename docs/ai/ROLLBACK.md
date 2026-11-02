@@ -1,5 +1,12 @@
 # Rollback
 
+## Stage 2 global live world · 2026-11-02
+Safe commit: `cdd1ca7` (main). Work lives on branch `feat/stage2-global-world`.
+Revert with: `git switch main` (branch unmerged), or after merge `git revert cdd1ca7..<last Stage 2 commit>`.
+Files touched: `server/{worldCore,worldCore.test,worldRoutes}.ts` (new), `server/{world,index}.ts`, `server/rooms.ts` (deleted), `prisma/schema.prisma`, `prisma/migrations/**` (new), `config/game.ts`, `vitest.config.ts`, `scripts/verify-backend.ps1`, `.env.example`, `src/App.tsx`, `src/screens/*` (deleted), `src/components/{HeadToHead,RivalFund,ConfrontationBanner,LiquidationScreen}.tsx` (deleted), `src/components/{Terminal,Hero,PositionRow,FundSummaryPanel,RivalPanel}.tsx`, `src/store/{gameStore,stateMapper,api}.ts` + tests, `docs/ai/*`.
+Non-code changes to undo: none so far — no database has ever been created from these migrations. If one was created, `docker compose down -v` resets it (DESTROYS all world data), then `npx prisma generate` on the reverted schema.
+Re-check after rollback: `npm run typecheck`; `npm test`; `npm run lint`; `npm run build`.
+
 ## Stage 1 repo cleanup · 2026-11-02
 Safe commit: `da08a4f` (main). Work lives on branch `chore/stage1-cleanup`.
 Revert with: `git switch main` (branch unmerged), or after merge `git revert <first>..<last>` over the Stage 1 commits.
