@@ -36,17 +36,22 @@ const usd = (v: number) => `$${Math.abs(Math.round(v)).toLocaleString('en-US')}`
 const signedUsd = (v: number) => `${v < 0 ? '-' : '+'}${usd(v)}`;
 const thesis = (r: string) => (r.length > 160 ? `${r.slice(0, 157)}...` : r);
 
-/** The fund's own decision, if it filled, as an episode. */
-export function episodeFromDecision(after: RivalFund, nav: number, tick: number): MemoryEntry | null {
+/**
+ * The fund's own decision, if it filled, as an episode. `source` is who made
+ * it (D-025); anything but the model is prefixed so the model never reads a
+ * fallback policy's trade as its own call.
+ */
+export function episodeFromDecision(after: RivalFund, nav: number, tick: number, source = 'llm'): MemoryEntry | null {
   const d = after.lastDecision;
   if (!d || !d.ticker || d.fillPrice === undefined) return null;
+  const by = source === 'llm' ? '' : `(${source}) `;
   if (d.action === 'buy' || d.action === 'short') {
     const size = d.dollarAmount ?? 0;
     return {
       kind: 'episodic',
       tickCountAt: tick,
       subject: d.ticker,
-      content: `Opened ${d.action === 'buy' ? 'LONG' : 'SHORT'} ${d.ticker} ${usd(size)} at $${d.fillPrice.toFixed(2)} — ${thesis(d.reasoning)}`,
+      content: `${by}Opened ${d.action === 'buy' ? 'LONG' : 'SHORT'} ${d.ticker} ${usd(size)} at $${d.fillPrice.toFixed(2)} — ${thesis(d.reasoning)}`,
       importance: clamp01(Math.max(0.1, (size / Math.max(nav, 1)) * 3)),
       outcomeUsd: null,
     };
@@ -56,7 +61,7 @@ export function episodeFromDecision(after: RivalFund, nav: number, tick: number)
       kind: 'episodic',
       tickCountAt: tick,
       subject: d.ticker,
-      content: `Closed ${d.ticker} for ${signedUsd(d.realizedPnL)} — ${thesis(d.reasoning)}`,
+      content: `${by}Closed ${d.ticker} for ${signedUsd(d.realizedPnL)} — ${thesis(d.reasoning)}`,
       importance: clamp01(0.3 + (Math.abs(d.realizedPnL) / Math.max(nav, 1)) * 10),
       outcomeUsd: d.realizedPnL,
     };

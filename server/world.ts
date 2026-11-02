@@ -88,6 +88,16 @@ const createMessage: CreateMessage | null = ANTHROPIC_API_KEY ? anthropicCreate(
 /** Every provider call reserves budget here first (VISION §12, D-025). */
 const ledger = new BudgetLedger(GLOBAL_DAILY_BUDGET_USD, MAX_CONCURRENT_LLM_CALLS);
 
+/** What the observer payload learns from a fund's live agent; a fund without one is observed only. */
+export function agentObservation(
+  agents: Agent[],
+  fundId: number,
+): { thinking: boolean; spend: { todayUsd: number; dailyBudgetUsd: number } | null; memory: MemoryEntry[] } {
+  const agent = agents.find((a) => a.fundId === fundId);
+  if (!agent) return { thinking: false, spend: null, memory: [] };
+  return { thinking: agent.pending && !agent.liquidated, spend: fundSpend(fundId, agent.profile), memory: agent.memory };
+}
+
 /** Today's spend vs budget for a registered fund, for the observer payload. */
 export function fundSpend(fundId: number, profile: FundProfile): { todayUsd: number; dailyBudgetUsd: number } {
   return { todayUsd: ledger.spentToday(fundId, new Date()), dailyBudgetUsd: profile.dailyBudgetUsd };
@@ -534,9 +544,9 @@ async function remember(w: World, agent: Agent, entries: MemoryEntry[]): Promise
  * filled trade (and reflects once enough closes accumulate); every other live
  * fund holding that ticker records the public move as a relationship note.
  */
-async function rememberDecision(w: World, agent: Agent, after: RivalFund): Promise<void> {
+async function rememberDecision(w: World, agent: Agent, after: RivalFund, source: string): Promise<void> {
   const tick = w.market.tickCount;
-  const episode = episodeFromDecision(after, markToMarket(after, w.market).nav, tick);
+  const episode = episodeFromDecision(after, markToMarket(after, w.market).nav, tick, source);
   if (!episode) return;
   const own: MemoryEntry[] = [episode];
   const reflection = episode.outcomeUsd !== null ? reflect([...agent.memory, episode], tick) : null;
@@ -679,7 +689,7 @@ async function decideFund(w: World, agent: Agent): Promise<void> {
     w.market = market;
     agent.fund = after;
     await persistFundState(w, agent.fundId, before, after, decision, origin);
-    await rememberDecision(w, agent, after);
+    await rememberDecision(w, agent, after, origin.source);
   });
 }
 

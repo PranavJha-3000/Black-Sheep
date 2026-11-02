@@ -62,6 +62,13 @@ describe('episodeFromDecision', () => {
     expect(e!.content).toContain('Closed VOLT for -$250,000');
   });
 
+  it('marks a trade the fund model did not make, so the model never mistakes a policy call for its own (review)', () => {
+    const d = dec({ action: 'buy', ticker: 'NOVA', dollarAmount: 1_000_000, fillPrice: 80 });
+    expect(episodeFromDecision(after(d), NAV, 1, 'policy')!.content).toMatch(/^\(policy\) Opened LONG NOVA/);
+    expect(episodeFromDecision(after(d), NAV, 1, 'budget')!.content).toMatch(/^\(budget\) Opened/);
+    expect(episodeFromDecision(after(d), NAV, 1, 'llm')!.content).toMatch(/^Opened LONG NOVA/);
+  });
+
   it('a hold, a rejected open (no fill) or no decision writes nothing', () => {
     expect(episodeFromDecision(after(dec({ action: 'hold' })), NAV, 1)).toBeNull();
     expect(episodeFromDecision(after(dec({ action: 'buy', ticker: 'NOVA', dollarAmount: 5 })), NAV, 1)).toBeNull();
