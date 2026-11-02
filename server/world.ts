@@ -93,6 +93,7 @@ const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY ?? '';
 const createMessage: CreateMessage | null = ANTHROPIC_API_KEY ? anthropicCreate(ANTHROPIC_API_KEY) : null;
 /** World Director configuration (D-029): none | rule | jev (the Jev adapter is a disabled stub). */
 const directorMode = resolveDirectorMode(process.env.DIRECTOR_MODE, DIRECTOR_MODE);
+export const currentDirectorMode = (): string => directorMode;
 const jevConfig = jevConfigFromEnv(process.env);
 /** Every provider call reserves budget here first (VISION §12, D-025). */
 const ledger = new BudgetLedger(GLOBAL_DAILY_BUDGET_USD, MAX_CONCURRENT_LLM_CALLS);

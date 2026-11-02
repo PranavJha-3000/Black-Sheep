@@ -138,6 +138,10 @@ export const OBSERVER_JSON_MAX = 2000;
 export const OBSERVER_TRACE_LIMIT = 20;
 /** Items in the activity feed. */
 export const OBSERVER_ACTIVITY_LIMIT = 40;
+/** NAV snapshots per fund used for analytics (newest). */
+export const ANALYTICS_NAV_POINTS = 2000;
+/** Recent market events used for world analytics. */
+export const ANALYTICS_EVENT_LIMIT = 500;
 
 // --- World Director (packages/engine/src/director.ts, server/world.ts) ---
 /** 'none' | 'rule' | 'jev'. The DIRECTOR_MODE env var overrides it; 'jev' acts as 'none' until the Jev adapter is configured. */
