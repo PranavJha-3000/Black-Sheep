@@ -138,3 +138,21 @@ export const OBSERVER_JSON_MAX = 2000;
 export const OBSERVER_TRACE_LIMIT = 20;
 /** Items in the activity feed. */
 export const OBSERVER_ACTIVITY_LIMIT = 40;
+
+// --- World Director (packages/engine/src/director.ts, server/world.ts) ---
+/** 'none' | 'rule' | 'jev'. The DIRECTOR_MODE env var overrides it; 'jev' acts as 'none' until the Jev adapter is configured. */
+export const DIRECTOR_MODE = 'rule';
+/** The Director considers an intervention every this many ticks, in its own slot. */
+export const DIRECTOR_EVERY_TICKS = 10;
+/** Slot offset (funds use 0, 3 and 6). */
+export const DIRECTOR_OFFSET = 9;
+/** Minimum ticks between two interventions. */
+export const DIRECTOR_COOLDOWN_TICKS = 60;
+/** Ticks without any market event before the market counts as quiet. */
+export const DIRECTOR_QUIET_TICKS = 30;
+/** Mean |daily change| below which the market counts as calm (fraction). */
+export const DIRECTOR_CALM_ABS_CHANGE = 0.01;
+/** Mean |daily change| above which the market is already stressed: never intervene (fraction). */
+export const DIRECTOR_HOT_ABS_CHANGE = 0.05;
+/** A quiet market that has run up at least this much (mean daily change) gets tightening. */
+export const DIRECTOR_RUNUP_CHANGE = 0.02;
