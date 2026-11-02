@@ -8,6 +8,8 @@
 
 ## Open items
 - [ ] Delete parked branch `wip/stage2-global-world` (user decision; nothing from it was merged).
+- [ ] Stage 2 review minors (deferred): `/world/state` + tick loop are N+1 (add `@@index([fundId, timestamp])` on RivalDecisionLog, batch queries); route reads `w.market` outside the lock; ticks can queue if one exceeds 5s; failed world load retries every tick/poll; `thinking` stays true for a just-liquidated fund; latest snapshot picked by timestamp not id and MarketTick is never pruned; restart loses ≤2 ticks; `verify-backend.ps1` should use `prisma migrate deploy`; `decideRival` mutates memory before persist succeeds (pre-existing).
+- [ ] Confirm: should the public payload expose `world.seed`? With the client-side engine it lets observers predict upcoming price noise (kept for now; observers cannot act).
 - [ ] **Stage 3 — fund registry + observer API:** replace the player `Fund` and the `me` projection in `/state`/`stateMapper` with a registry of ~3 AI funds (VISION §6); replace the single contrarian rival (`APEX CAPITAL`, `RIVAL_SYSTEM_PROMPT` mentions "the rival player").
 - [ ] **Observer UI (VISION §13):** the terminal still focuses one fund (`funds[0]`) with player-shaped copy ("YOUR POSITIONS", RAVEN CAPITAL branding, "Select NOVA… and BUY"); build a multi-fund observer view.
 - [ ] Multi-process writer: Postgres advisory-lock leader election (D-016 revisit) before running more than one server process.
