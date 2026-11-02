@@ -66,6 +66,8 @@ export const CROWD_FRAC = 0.02;
 export const CROWD_MIN_DOLLARS = 500_000;
 
 // --- Fund fallback policies (packages/engine/src/policies.ts) ---
+/** Gross exposure (longs + shorts at market) may not exceed this multiple of NAV. */
+export const POLICY_MAX_GROSS_LEVERAGE = 1.5;
 /** Smallest notional any policy will open, in dollars. */
 export const POLICY_MIN_TRADE_DOLLARS = 1_000;
 /** Cautious: close a position at or above this fractional gain. */

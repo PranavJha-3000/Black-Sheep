@@ -15,7 +15,8 @@
  *   contrarian - the original crowd-fade twin (makeRandomDecision)
  *
  * Whatever the policy, a new position never exceeds the fund's
- * maxPositionFraction of available cash.
+ * maxPositionFraction of min(NAV, available cash), and the book's gross
+ * exposure never exceeds POLICY_MAX_GROSS_LEVERAGE × NAV.
  */
 
 import { availableCash, positionPnl } from './portfolio';
@@ -32,6 +33,7 @@ import {
   POLICY_CAUTIOUS_MAX_VOLATILITY,
   POLICY_CAUTIOUS_STOP_LOSS,
   POLICY_CAUTIOUS_TAKE_PROFIT,
+  POLICY_MAX_GROSS_LEVERAGE,
   POLICY_MIN_TRADE_DOLLARS,
   POLICY_QUANT_MIN_FLOW,
 } from '../../../config/game';
@@ -64,10 +66,24 @@ function hold(reasoning: string): RivalDecision {
   return { action: 'hold', reasoning, confidence: 0.5 };
 }
 
-/** Notional for a new position, or 0 when the fund cannot afford a trade. */
+/**
+ * Notional for a new position, or 0 when the fund cannot afford a trade.
+ *
+ * Sized against NAV, not cash: opening a short credits its proceeds to cash,
+ * so cash-based sizing would compound with every short. The gross-exposure
+ * ceiling bounds the whole book, not just one trade.
+ */
 function sizeFor(input: RivalDecisionInput, profile: FundProfile): number {
+  let nav = input.ownFund.cash;
+  let gross = 0;
+  for (const pos of input.ownFund.positions) {
+    const value = (priceOf(input, pos.ticker) ?? pos.entryPrice) * pos.quantity;
+    nav += pos.direction === 'long' ? value : -value;
+    gross += value;
+  }
   const avail = availableCash(input.ownFund);
-  const size = Math.floor(avail * profile.maxPositionFraction);
+  const room = nav * POLICY_MAX_GROSS_LEVERAGE - gross;
+  const size = Math.floor(Math.min(Math.min(avail, nav) * profile.maxPositionFraction, room));
   return size >= POLICY_MIN_TRADE_DOLLARS ? size : 0;
 }
 

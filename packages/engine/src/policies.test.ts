@@ -5,6 +5,7 @@ import { createInitialMarket } from './market';
 import { openPosition } from './portfolio';
 import { buildDecisionInput, createRivalFund, type RivalDecisionInput, type RivalFund } from './rival';
 import type { MarketEvent, MarketState } from './types';
+import { POLICY_MAX_GROSS_LEVERAGE } from '../../../config/game';
 
 const CAPITAL = 10_000_000;
 
@@ -168,6 +169,23 @@ describe('decideByPolicy', () => {
     expect(big.dollarAmount).toBe(CAPITAL * QUANT.maxPositionFraction);
     const close = { action: 'close' as const, ticker: 'NOVA', reasoning: 'out', confidence: 0.5 };
     expect(enforceRiskLimit(close, i, QUANT)).toBe(close);
+  });
+
+  it('repeated shorts cannot lever the fund past its gross-exposure ceiling', () => {
+    // Shorting credits proceeds to cash; sizing must not compound on that.
+    const m = flatMarket();
+    let f = fresh('aggressive');
+    let lastSize = Infinity;
+    for (let i = 0; i < 12; i++) {
+      const proposal = { action: 'short' as const, ticker: 'NOVA', dollarAmount: 50_000_000, reasoning: 'more', confidence: 0.9 };
+      const d = enforceRiskLimit(proposal, input(f, m), AGGRESSIVE);
+      if (d.action !== 'short') break;
+      expect(d.dollarAmount!).toBeLessThanOrEqual(lastSize);
+      lastSize = d.dollarAmount!;
+      f = { ...f, ...openPosition(f, 'NOVA', 'short', d.dollarAmount!, m.companies.NOVA.price) };
+    }
+    const gross = f.positions.reduce((s, p) => s + p.quantity * m.companies[p.ticker].price, 0);
+    expect(gross).toBeLessThanOrEqual(CAPITAL * POLICY_MAX_GROSS_LEVERAGE + 1);
   });
 
   it('with zero available cash, never opens — but still closes', () => {

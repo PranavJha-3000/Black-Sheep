@@ -108,6 +108,12 @@ describe('stateMapper (poll → terminal projection)', () => {
     expect(p.funds[2].thinking).toBe(true);
   });
 
+  it('focuses the lowest-id registered fund over a legacy unregistered one', () => {
+    const p = projectState(payload([fund(1, { name: 'APEX CAPITAL' }), fund(5, { name: 'HALDEN WHITMORE' })]), seededPrev());
+    expect(p.fundId).toBe(5);
+    expect(p.name).toBe('HALDEN WHITMORE');
+  });
+
   it('focuses the lowest-id fund and maps its last decision', () => {
     const decision = {
       action: 'short',

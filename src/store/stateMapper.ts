@@ -87,7 +87,9 @@ function isMarketEventType(t: string): MarketEventType {
 
 export function projectState(raw: WorldStatePayload, prev: ProjectionPrev): Projection {
   const companies = raw.market.companies as Record<Ticker, Company>;
-  const focus = raw.funds[0] ?? null;
+  // Focus the lowest-id registered fund; a legacy fund outside the registry
+  // never decides, so it only takes focus when nothing else exists.
+  const focus = raw.funds.find((f) => f.profile !== null) ?? raw.funds[0] ?? null;
 
   // --- focus fund (seed fund while the world has none) ----------------------
   const fundBase: Fund = {
