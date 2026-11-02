@@ -1,5 +1,13 @@
 # Rollback
 
+## Stage 1 repo cleanup · 2026-11-02
+Safe commit: `da08a4f` (main). Work lives on branch `chore/stage1-cleanup`.
+Revert with: `git switch main` (branch unmerged), or after merge `git revert <first>..<last>` over the Stage 1 commits.
+Files touched: `docs/VISION.md` (new), `docs/archive/BLACK-SHEEP-DESIGN-DOC.md` (moved), `README.md`, `.clinerules/{code.md (deleted),coding_standard.md}`, `docs/ai/*`, `src/components/{OrderTicket (deleted),AwaySummary (deleted),PositionRow,Terminal,FundSummaryPanel,LiquidationScreen}.tsx`, `src/App.tsx`, `src/store/gameStore.ts`, `src/store/rival.integration.test.ts`, `server/{rooms,index}.ts`, `server/{away,awayUtil,resultCard}.ts` (deleted), `packages/engine/src/{rivalLLM,rivalLLM.test,index}.ts`, `packages/engine/src/{away,away.test}.ts` (deleted), `config/game.ts`, `vite.config.ts`, `package.json`, `package-lock.json`.
+Non-code changes to undo: run `npm install` after reverting the result-card commit to restore `@vercel/og`.
+Parked WIP: the unfinished Stage 2 global-world edit (previously uncommitted on main) is on branch `wip/stage2-global-world` (`2ab185d`). It does not typecheck and its migration SQL is missing a `;`.
+Re-check after rollback: `npm run typecheck`; `npm test`; `npm run lint`; `npm run build`.
+
 ## Centralize tuning params into config/game.ts · 2026-10-09
 Safe commit: uncommitted (working tree).
 Revert with: `git checkout HEAD -- config server packages/engine/src src` — pure constant relocation, no data/schema touched.

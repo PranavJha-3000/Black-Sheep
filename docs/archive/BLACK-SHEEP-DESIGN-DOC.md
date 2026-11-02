@@ -1,5 +1,7 @@
 # BLACK SHEEP — Design & Build Document
 
+> **ARCHIVED 2026-11-02.** Superseded by docs/VISION.md (research-lab direction). Kept for history; not a spec.
+
 > **Audience:** humans (understand the idea) and AI coding agents (know what to build, why, and what to do when it breaks).
 > **Status legend:** ✅ built (Phases 1–3) · 🔧 to build · ❓ open decision · ⚠️ assumption (a placeholder number/name I proposed, not a decision you made — tune freely).
 > **Rule for agents:** if this doc and the code disagree, do not silently pick one. Flag it in `docs/ai/HANDOVER.md` Open Items.
