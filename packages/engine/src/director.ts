@@ -18,6 +18,7 @@ import {
   DIRECTOR_COOLDOWN_TICKS,
   DIRECTOR_EVERY_TICKS,
   DIRECTOR_HOT_ABS_CHANGE,
+  DIRECTOR_MAJOR_EVENT_PCT,
   DIRECTOR_QUIET_TICKS,
   DIRECTOR_RUNUP_CHANGE,
 } from '../../../config/game';
@@ -38,14 +39,15 @@ export interface DirectorDecision {
 /** Everything the Director may know. Public conditions only. */
 export interface DirectorObservation {
   tickCount: number;
+  /** Ticks since the last MAJOR event (see isMajorEvent). */
   ticksSinceLastEvent: number;
   /** Null when the Director has never intervened. */
   ticksSinceLastIntervention: number | null;
   /** Another event already fired this tick: the Director must not stack on it. */
   eventFiredThisTick: boolean;
-  /** Mean |change since previous close| across listed companies (fraction). */
+  /** Mean |change from the mean-reversion anchor (`previousClose`)| across listed companies (fraction). */
   avgAbsChangePct: number;
-  /** Mean signed change since previous close (fraction). */
+  /** Mean signed change from the anchor (fraction). */
   marketChangePct: number;
   /** Sectors with at least one listed company, sorted. */
   sectors: Sector[];
@@ -60,6 +62,11 @@ export interface ObserveInput {
   eventFiredThisTick: boolean;
   fundsAlive: number;
   fundsTotal: number;
+}
+
+/** Only a major event resets the Director's quiet clock; ambient news fires every few ticks. */
+export function isMajorEvent(e: { priceImpactPercent: number }): boolean {
+  return Math.abs(e.priceImpactPercent) >= DIRECTOR_MAJOR_EVENT_PCT;
 }
 
 export function observeWorld(input: ObserveInput): DirectorObservation {

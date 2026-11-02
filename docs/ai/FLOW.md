@@ -7,8 +7,8 @@ Entry: `server/world.ts → startWorldLoop()` → `setInterval(5s)` → `ensureL
 2. `tickMarket(market, seed)` → `maybeFireScriptedEvent`/`generateEvent` → `applyEvent`
 3. `trackPeakNav(w)` — compute NAV for every fund at new prices; update `Fund.peakNav` if a new all-time high
 4. `liquidateFunds(w)` — for **every** non-liquidated fund with open positions: reconstruct the engine Fund, `checkLiquidation`. If `atRisk`: force-close all positions at market, `Fund.liquidated = true`, `deriveCauseOfDeath`, `LiquidationLog` (`rivalContext: null`) — one transaction. If the fund has an agent, `agent.liquidated = true` and a liquidation episode is remembered.
-5. World Director (D-029): `DIRECTOR_MODE != none` and `tickCount % 10 === 9` → `runDirector`: `observeWorld` (public conditions only) → `ruleDirector` or `proposeWithJev` (stub: none) → `validateIntervention` → `buildDirectorEvent` (separate RNG) → `applyEvent`; one `DirectorDecisionLog` row per cycle
-6. Each fired event (scheduled/random and Director) → `MarketEventLog` row; `director.lastEventTick` updated
+5. World Director (D-029): `DIRECTOR_MODE != none` and `tickCount % 10 === 9` → `runDirector`: `observeWorld` (public conditions only; the quiet clock counts major events, |impact| ≥ 5%) → `ruleDirector` or `proposeWithJev` (stub: none) → `validateIntervention` → `buildDirectorEvent` (separate RNG) → `applyEvent`; one `DirectorDecisionLog` row per cycle
+6. Each fired event (scheduled/random and Director) → `MarketEventLog` row; `director.lastEventTick` updated for major events
 7. `tickCount % 3 === 0`? → `MarketTick` row (`snapshotJson`) + one `FundNavSnapshot` per fund (NAV, gross exposure from `trackPeakNav`'s marks)
 8. For each agent: `shouldFundDecide(tickCount, agent.pending, agent.liquidated, every, offset)` (its own slot, one call in flight per fund, never when liquidated) → fire `decideFund(w, agent)` non-blocking
 9. `decideFund`: `buildDecisionInput` + `memory: agent.memory` → `chooseDecision` (see "Fund decision cycle") OUTSIDE the lock → `enforceRiskLimit` → inside `withWorldLock`: drop the decision if the fund was liquidated meanwhile; else `applyTrade` → `applyRivalDecision` → persist in ONE transaction: Fund.cash + added/removed Positions + `RivalDecisionLog` row (`source`, `model`, `llmCallId`) → `rememberDecision` (see "Agent memory")
@@ -67,6 +67,18 @@ Entry: `server/worldRoutes.ts` → `ensureLiveWorld()` → pure builders in `ser
 Assumptions: observers are humans; agents never call these routes.
 Side effects: reads only.
 Fragile: every field added to a builder is public; keep `observerCore.test.ts`'s field allow-list green.
+
+## Research Lab (`/lab`, D-032, D-033)
+Entry: `server/labRoutes.ts`; runner `server/experiments.ts → startExperimentRunner()` (started beside the world loop in `server/index.ts`)
+
+1. `POST /lab/experiments`: `checkLabToken(header, LAB_ADMIN_TOKEN)` → 503 if unset / 401 → `parseExperimentRequest` (name, one variable, 2–6 distinct values, base funds/director/cadence/ticks ≤ 5000, 1–10 distinct seeds) → 400 → `Experiment` row `queued` with `specJson` + `experimentManifest` → 201 `{id}`.
+2. Runner: on start, `running` rows → `queued`. Every 2 s, if idle: oldest `queued` → claim (`updateMany` where still queued) → re-validate the stored spec → `runExperimentSpec`: for each arm (`expandArms`) and seed, `simulateWorld` (pure; the live tick's engine calls, synchronous; same-tick deciders read the pre-trade market) then `setImmediate` yield → `compareArms` + downsampled series + digests → `done` with a manifest recomputed at run time (or `failed` with the error).
+3. `GET /lab/experiments` (newest 50 summaries; summary columns only), `GET /lab/experiments/:id` (spec, manifest, result; corrupt JSON → null; 404).
+4. Client: `gameStore` fetches the list and the open experiment only in RESEARCH LAB, at most every 5 s; a detail for a deselected experiment is dropped; `createExperiment(body, token)` sends the token with that request only.
+
+Assumptions: one server process (one runner). Experiment worlds share nothing with the live world.
+Side effects: CPU on the server process (≈ 42 ms per 5000-tick run, yielding between runs); one row per experiment.
+Fragile: every field of `ExperimentDetail` is public.
 
 ## Analytics (`GET /world/analytics`, D-028)
 Entry: `server/worldRoutes.ts` → `ensureLiveWorld()` → `buildAnalytics` in `server/analyticsCore.ts`

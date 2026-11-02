@@ -15,10 +15,11 @@ import type { FundSummary, ProjectionPrev } from './stateMapper';
 import type { WorldStatePayload } from '../../server/worldCore';
 import type { ActivityPayload, FundTracePayload } from '../../server/observerCore';
 import type { AnalyticsPayload } from '../../server/analyticsCore';
-import { ANALYTICS_POLL_MS, STARTING_CAPITAL } from '../../config/game';
+import type { ExperimentDetail, ExperimentSummary } from '../../server/labCore';
+import { ANALYTICS_POLL_MS, LAB_POLL_MS, STARTING_CAPITAL } from '../../config/game';
 
-/** Observer navigation (VISION §13). TIMELINE and RESEARCH LAB come later. */
-export type ObserverView = 'world' | 'funds' | 'fund' | 'activity' | 'analytics';
+/** Observer navigation (VISION §13). TIMELINE comes later. */
+export type ObserverView = 'world' | 'funds' | 'fund' | 'activity' | 'analytics' | 'lab';
 
 export interface GameStoreState {
   view: ObserverView;
@@ -32,6 +33,12 @@ export interface GameStoreState {
   analytics: AnalyticsPayload | null;
   setView: (view: ObserverView) => void;
   openFund: (fundId: number) => void;
+  /** RESEARCH LAB (fetched only in that view). */
+  lab: { list: ExperimentSummary[] | null; detail: ExperimentDetail | null };
+  selectedExperimentId: number | null;
+  openExperiment: (id: number) => void;
+  /** POST a new experiment. The admin token is used for this request only and never stored. */
+  createExperiment: (body: unknown, token: string) => Promise<{ ok: true; id: number } | { ok: false; error: string }>;
   /** The focus fund's DB id (lowest id in the world). Null before a fund exists. */
   fundId: number | null;
   /** The focus fund's display name. */
@@ -94,7 +101,7 @@ const SEED_FUND = createFund(STARTING_CAPITAL, 0);
 
 type SeedState = Omit<
   GameStoreState,
-  'reset' | 'selectTicker' | 'poll' | 'selectedTicker' | 'view' | 'selectedFundId' | 'trace' | 'activity' | 'analytics' | 'setView' | 'openFund'
+  'reset' | 'selectTicker' | 'poll' | 'selectedTicker' | 'view' | 'selectedFundId' | 'trace' | 'activity' | 'analytics' | 'setView' | 'openFund' | 'lab' | 'selectedExperimentId' | 'openExperiment' | 'createExperiment'
 >;
 
 function seedState(): SeedState {
@@ -136,6 +143,8 @@ function seedState(): SeedState {
 
 /** When the analytics fetch last started; 0 forces a fetch on the next poll. */
 let analyticsFetchedAt = 0;
+/** When the lab list was last fetched; 0 forces a fetch. */
+let labFetchedAt = 0;
 
 export const useGameStore = create<GameStoreState>((set, get) => ({
   ...seedState(),
@@ -145,6 +154,8 @@ export const useGameStore = create<GameStoreState>((set, get) => ({
   trace: null,
   activity: null,
   analytics: null,
+  lab: { list: null, detail: null },
+  selectedExperimentId: null,
   // ---------------------------------------------------------------------------
   // Actions
   // ---------------------------------------------------------------------------
@@ -153,6 +164,7 @@ export const useGameStore = create<GameStoreState>((set, get) => ({
   selectTicker: (ticker: Ticker) => set({ selectedTicker: ticker }),
   setView: (view: ObserverView) => {
     analyticsFetchedAt = 0;
+    labFetchedAt = 0;
     set({ view });
     void get().poll();
   },
@@ -160,10 +172,25 @@ export const useGameStore = create<GameStoreState>((set, get) => ({
     set({ view: 'fund', selectedFundId: fundId, trace: null });
     void get().poll();
   },
+  openExperiment: (id: number) => {
+    labFetchedAt = 0;
+    set({ view: 'lab', selectedExperimentId: id, lab: { ...get().lab, detail: null } });
+    void fetchLab();
+  },
+  createExperiment: async (body: unknown, token: string) => {
+    try {
+      const { id } = await apiFetch<{ id: number }>('/lab/experiments', { method: 'POST', body, token });
+      get().openExperiment(id);
+      return { ok: true as const, id };
+    } catch (err) {
+      return { ok: false as const, error: err instanceof Error ? err.message : String(err) };
+    }
+  },
   poll: async () => {
     try {
       const { priceHistory, navHistory, rivalDecisionKey, fundId, view, selectedFundId } = get();
       // Only the open view's investigation endpoint is polled.
+      if (view === 'lab') void fetchLab();
       const wantAnalytics = view === 'analytics' && Date.now() - analyticsFetchedAt >= ANALYTICS_POLL_MS;
       if (wantAnalytics) analyticsFetchedAt = Date.now();
       const [raw, trace, activity, analytics] = await Promise.all([
@@ -228,3 +255,22 @@ export const useGameStore = create<GameStoreState>((set, get) => ({
     }
   },
 }));
+
+/** RESEARCH LAB polling: the list and the open experiment, at most every LAB_POLL_MS. */
+async function fetchLab(): Promise<void> {
+  if (Date.now() - labFetchedAt < LAB_POLL_MS) return;
+  labFetchedAt = Date.now();
+  const id = useGameStore.getState().selectedExperimentId;
+  const [list, detail] = await Promise.all([
+    apiFetch<{ experiments: ExperimentSummary[] }>('/lab/experiments').catch(() => null),
+    id !== null ? apiFetch<ExperimentDetail>(`/lab/experiments/${id}`).catch(() => null) : Promise.resolve(null),
+  ]);
+  const { lab, selectedExperimentId } = useGameStore.getState();
+  useGameStore.setState({
+    lab: {
+      list: list?.experiments ?? lab.list,
+      // A detail answering an experiment no longer selected is dropped.
+      detail: detail && id === selectedExperimentId ? detail : lab.detail,
+    },
+  });
+}

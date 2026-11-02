@@ -60,8 +60,8 @@ describe('ruleDirector', () => {
   });
 
   it('tightens a quiet market that has run up', () => {
-    // Every company up ~3%: mean |change| equals the mean change, as it must in a broad run-up.
-    expect(ruleDirector(obs({ avgAbsChangePct: 0.03, marketChangePct: 0.03 })).intervention).toEqual({ kind: 'macro_tightening' });
+    // Every company up ~5%: mean |change| equals the mean change, as it must in a broad run-up.
+    expect(ruleDirector(obs({ avgAbsChangePct: 0.05, marketChangePct: 0.05 })).intervention).toEqual({ kind: 'macro_tightening' });
   });
 
   it('varies its choice over time', () => {

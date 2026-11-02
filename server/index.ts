@@ -1,6 +1,8 @@
 import 'dotenv/config';
 import express from 'express';
 import { authRouter } from './auth';
+import { startExperimentRunner } from './experiments';
+import { labRouter } from './labRoutes';
 import { startWorldLoop } from './world';
 import { worldRouter } from './worldRoutes';
 
@@ -27,6 +29,7 @@ app.get('/health', (_req, res) => {
 
 app.use('/auth', authRouter);
 app.use('/world', worldRouter);
+app.use('/lab', labRouter);
 
 // Express error handler (next-param signature is how Express detects it).
 app.use((err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
@@ -41,9 +44,12 @@ app.listen(PORT, () => {
 
 // The world ticks with or without clients connected - that is the point.
 const stopWorld = startWorldLoop();
+// Experiment worlds run beside it, never touching the live world (D-032).
+const stopLab = startExperimentRunner();
 
 const shutdown = (): void => {
   stopWorld();
+  stopLab();
   process.exit(0);
 };
 process.on('SIGINT', shutdown);
