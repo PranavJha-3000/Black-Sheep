@@ -76,8 +76,11 @@ ${MARKET_VIEW}
 
 Rules:
 - Stay true to your mandate and strategy; do not drift into another fund's style.
-- Never size a new position above ${Math.round(profile.maxPositionFraction * 100)}% of your available cash.
+- Never size a new position above ${Math.round(profile.maxPositionFraction * 100)}% of your NAV; calculate_risk reports the exact limit.
 - HOLD is a legitimate decision when nothing fits your strategy.
+
+Tools: research only as much as the decision needs - inspect_company, inspect_portfolio, calculate_risk, recent_events - then finish by calling submit_decision exactly once.
+If tools are unavailable, reply instead with a single JSON object.
 
 ${JSON_CONTRACT}`;
 }
@@ -109,7 +112,7 @@ export function buildRivalUserMessage(input: RivalDecisionInput): string {
   }
   lines.push('');
   lines.push(`Aggregate flow lean: ${input.estimatedPlayerSectorExposure}.`);
-  lines.push('Decide now. Reply with ONLY the JSON object.');
+  lines.push('Decide now: finish with submit_decision (or ONLY the JSON object if tools are unavailable).');
   return lines.join('\n');
 }
 
@@ -190,6 +193,34 @@ function firstJsonObject(text: string): string | null {
   return text.slice(start, end + 1);
 }
 
+/**
+ * Parse a decision out of model text (fenced, prose-wrapped or bare JSON).
+ * Returns null when there is no well-formed decision - callers fall back.
+ */
+export function parseDecisionText(text: string): RivalDecision | null {
+  const jsonStr = firstJsonObject(stripFences(text));
+  if (!jsonStr) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(jsonStr);
+  } catch {
+    return null;
+  }
+  return normaliseDecision(parsed);
+}
+
+/** Validate an untrusted value as a decision and normalise its fields. */
+export function normaliseDecision(value: unknown): RivalDecision | null {
+  if (!isRivalDecision(value)) return null;
+  return {
+    action: value.action,
+    ticker: typeof value.ticker === 'string' ? value.ticker : undefined,
+    dollarAmount: typeof value.dollarAmount === 'number' ? Math.floor(value.dollarAmount) : undefined,
+    reasoning: value.reasoning,
+    confidence: Math.min(1, Math.max(0, value.confidence)),
+  };
+}
+
 function isRivalDecision(value: unknown): value is RivalDecision {
   if (!value || typeof value !== 'object') return false;
   const v = value as Record<string, unknown>;
@@ -258,18 +289,9 @@ export async function makeLLMDecision(
     }
     const raw = extractText(data);
     if (!raw) throw new Error('LLM response had no text');
-    const cleaned = stripFences(raw);
-    const jsonStr = firstJsonObject(cleaned);
-    if (!jsonStr) throw new Error('No JSON object in LLM response');
-    const parsed: unknown = JSON.parse(jsonStr);
-    if (!isRivalDecision(parsed)) throw new Error('LLM JSON did not match RivalDecision shape');
-    return {
-      action: parsed.action,
-      ticker: typeof parsed.ticker === 'string' ? parsed.ticker : undefined,
-      dollarAmount: typeof parsed.dollarAmount === 'number' ? Math.floor(parsed.dollarAmount) : undefined,
-      reasoning: parsed.reasoning,
-      confidence: Math.min(1, Math.max(0, parsed.confidence)),
-    };
+    const decision = parseDecisionText(raw);
+    if (!decision) throw new Error('LLM response held no well-formed decision');
+    return decision;
   } catch (err) {
     // Graceful degradation: the placeholder brain is correct-by-construction,
     // so a failed LLM call still produces a sane, executable decision.
