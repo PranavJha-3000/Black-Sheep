@@ -37,7 +37,7 @@ worldRouter.get(
         peakNav: f.peakNav,
         liquidated: f.liquidated,
         liquidationCause: liquidation?.cause ?? null,
-        thinking: w.rivalPending && f.id === w.rivalFundId,
+        thinking: w.agents.some((a) => a.fundId === f.id && a.pending && !a.liquidated),
         openPositions,
         lastDecision,
       });

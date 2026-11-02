@@ -1,4 +1,5 @@
-import { getNetFlow } from '@black-sheep/engine/market';
+import { createInitialMarket, getNetFlow } from '@black-sheep/engine/market';
+import { FUND_PROFILES, getFundProfileByName, type FundProfile } from '@black-sheep/engine/funds';
 import { getExposure, INITIAL_MARGIN_RATE, markToMarket } from '@black-sheep/engine/portfolio';
 import type { Fund } from '@black-sheep/engine/portfolio';
 import { RIVAL_DECISION_TICKS } from '@black-sheep/engine/rival';
@@ -146,9 +147,44 @@ export function singleFlight<T>(load: () => Promise<T>): () => Promise<T> {
   };
 }
 
-/** A fund decides on the cadence tick, one call in flight, and never once liquidated. */
-export function shouldFundDecide(tickCount: number, pending: boolean, liquidated: boolean): boolean {
-  return tickCount > 0 && tickCount % RIVAL_DECISION_TICKS === 0 && !pending && !liquidated;
+/**
+ * A fund decides on its own cadence slot (tickCount % every === offset), one
+ * call in flight, and never once liquidated. Each fund passes its own
+ * pending/liquidated flags, so one fund's slow call never blocks another.
+ */
+export function shouldFundDecide(
+  tickCount: number,
+  pending: boolean,
+  liquidated: boolean,
+  every: number = RIVAL_DECISION_TICKS,
+  offset = 0,
+): boolean {
+  return tickCount > 0 && tickCount % every === offset && !pending && !liquidated;
+}
+
+/**
+ * Registry funds the world does not have yet (matched by name, the fund's
+ * in-world identity). Funds in the world that the registry does not list are
+ * left alone: they stay observable but never decide.
+ */
+export function missingRegistryFunds(existingNames: string[]): FundProfile[] {
+  const have = new Set(existingNames);
+  return FUND_PROFILES.filter((p) => !have.has(p.name));
+}
+
+/**
+ * Bring a snapshot taken before the company universe grew up to date: any
+ * company the engine now lists but the snapshot lacks joins at its seed
+ * price. Existing companies are untouched. Returns the same market when
+ * nothing is missing.
+ */
+export function addMissingCompanies(market: MarketState): MarketState {
+  const seeds = createInitialMarket().companies;
+  const missing = Object.keys(seeds).filter((t) => !(t in market.companies));
+  if (missing.length === 0) return market;
+  const companies = { ...market.companies };
+  for (const t of missing) companies[t] = seeds[t];
+  return { ...market, companies };
 }
 
 // ---------------------------------------------------------------------------
@@ -178,9 +214,19 @@ export interface ObservedDecision {
   at: string;
 }
 
+/** The public face of a registered fund (null for funds outside the registry). */
+export interface ObservedProfile {
+  key: string;
+  personality: string;
+  mandate: string;
+  strategy: string;
+  model: string;
+}
+
 export interface ObservedFund {
   id: number;
   name: string;
+  profile: ObservedProfile | null;
   cash: number;
   startingCapital: number;
   nav: number;
@@ -281,9 +327,19 @@ export function buildWorldStatePayload(
     .map((f): ObservedFund => {
       const ef = engineFundFromRows(f.cash, f.startingCapital, f.openPositions);
       const exposure = getExposure(ef, market);
+      const profile = getFundProfileByName(f.name);
       return {
         id: f.id,
         name: f.name,
+        profile: profile
+          ? {
+              key: profile.key,
+              personality: profile.personality,
+              mandate: profile.mandate,
+              strategy: profile.strategy,
+              model: profile.model,
+            }
+          : null,
         cash: f.cash,
         startingCapital: f.startingCapital,
         nav: Math.max(1, markToMarket(ef, market).nav),

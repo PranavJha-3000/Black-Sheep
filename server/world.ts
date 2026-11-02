@@ -16,17 +16,20 @@ import {
 import {
   applyRivalDecision,
   buildDecisionInput,
-  makeRandomDecision,
-  RIVAL_NAME,
   type RivalDecision,
   type RivalFund,
+  type RivalPersonality,
 } from '@black-sheep/engine/rival';
-import { makeLLMDecision } from '@black-sheep/engine/rivalLLM';
+import { buildFundSystemPrompt, makeLLMDecision, type FundBrain } from '@black-sheep/engine/rivalLLM';
+import { getFundProfileByName, type FundProfile } from '@black-sheep/engine/funds';
+import { decideByPolicy, enforceRiskLimit } from '@black-sheep/engine/policies';
 import type { MarketEvent, MarketState, Ticker } from '@black-sheep/engine/types';
 import { prisma } from './db';
 import {
+  addMissingCompanies,
   enginePositionFromRow,
   engineFundFromRows,
+  missingRegistryFunds,
   parseWorldSnapshot,
   positionKey,
   realizedOfClosed,
@@ -42,6 +45,7 @@ import {
   TICK_INTERVAL_MS,
   WORLD_SEED,
 } from '../config/game';
+import { MODEL_REGISTRY } from '../config/models';
 
 /**
  * The persistent live world.
@@ -51,6 +55,10 @@ import {
  * nobody is watching. Humans only observe it through GET /world/state. The
  * engine is the shared package — the server only orchestrates:
  * tick → persist periodic snapshot → funds decide → persist deltas.
+ *
+ * Every fund in config/funds.ts is an Agent with its own cadence slot, its own
+ * in-flight flag and its own brain (VISION §6). Funds in the world that the
+ * registry no longer lists stay observable but never decide.
  */
 
 // Starting capital, tick interval, snapshot cadence, the event buffer and the
@@ -58,6 +66,17 @@ import {
 
 const ANTHROPIC_URL = 'https://api.anthropic.com/v1/messages';
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY ?? '';
+
+/** One registered fund's live decision state. */
+export interface Agent {
+  fundId: number;
+  profile: FundProfile;
+  fund: RivalFund;
+  /** One in-flight decision per fund; other funds are unaffected. */
+  pending: boolean;
+  /** A liquidated fund stays visible but never decides again (D-019). */
+  liquidated: boolean;
+}
 
 interface World {
   worldId: number;
@@ -67,12 +86,7 @@ interface World {
   market: MarketState;
   scheduler: SchedulerState;
   events: MarketEvent[];
-  rivalFundId: number;
-  rivalFund: RivalFund;
-  /** One in-flight LLM decision at a time. */
-  rivalPending: boolean;
-  /** A liquidated fund stays visible but never decides again (D-019). */
-  rivalLiquidated: boolean;
+  agents: Agent[];
 }
 
 let live: World | undefined;
@@ -100,8 +114,8 @@ export function withWorldLock<T>(fn: () => Promise<T>): Promise<T> {
   return next;
 }
 
-/** Rebuild the rival's engine fund from persisted rows (DB stores no engine objects). */
-async function rebuildRivalFund(fundId: number, market: MarketState): Promise<RivalFund> {
+/** Rebuild a fund's engine state from persisted rows (DB stores no engine objects). */
+async function rebuildFund(fundId: number, market: MarketState, personality: RivalPersonality): Promise<RivalFund> {
   const fund = await prisma.fund.findUniqueOrThrow({ where: { id: fundId } });
   const open = await prisma.position.findMany({ where: { fundId, closedAt: null } });
   const closed = await prisma.position.findMany({ where: { fundId, closedAt: { not: null } } });
@@ -126,7 +140,7 @@ async function rebuildRivalFund(fundId: number, market: MarketState): Promise<Ri
     realizedPnL,
     startingCapital: fund.startingCapital,
     history: [{ timestamp: market.timestamp, nav }],
-    personality: 'contrarian',
+    personality,
     lastDecision: lastDecisionRow
       ? {
           action: lastDecisionRow.action as RivalDecision['action'],
@@ -168,10 +182,13 @@ async function loadLiveWorld(): Promise<World> {
   }
   const worldId = row.id;
 
-  let rival = await prisma.fund.findFirst({ where: { worldId }, orderBy: { id: 'asc' } });
-  if (!rival) {
-    rival = await prisma.fund.create({
-      data: { worldId, name: RIVAL_NAME, cash: STARTING_CAPITAL, startingCapital: STARTING_CAPITAL },
+  // Every registry fund exists in the world (upsert: safe against a racing boot).
+  const existing = await prisma.fund.findMany({ where: { worldId }, select: { name: true } });
+  for (const profile of missingRegistryFunds(existing.map((f) => f.name))) {
+    await prisma.fund.upsert({
+      where: { worldId_name: { worldId, name: profile.name } },
+      create: { worldId, name: profile.name, cash: STARTING_CAPITAL, startingCapital: STARTING_CAPITAL },
+      update: {},
     });
   }
 
@@ -181,6 +198,8 @@ async function loadLiveWorld(): Promise<World> {
   let scheduler: SchedulerState;
   if (latest) {
     ({ market, scheduler } = parseWorldSnapshot(latest.snapshotJson));
+    // A snapshot from before the universe grew gains the new listings.
+    market = addMissingCompanies(market);
   } else {
     market = createInitialMarket();
     scheduler = initialScheduler();
@@ -202,18 +221,21 @@ async function loadLiveWorld(): Promise<World> {
     timestamp: r.timestamp.getTime(),
   }));
 
-  live = {
-    worldId,
-    name: row.name,
-    seed: row.seed,
-    market,
-    scheduler,
-    events,
-    rivalFundId: rival.id,
-    rivalFund: await rebuildRivalFund(rival.id, market),
-    rivalPending: false,
-    rivalLiquidated: rival.liquidated,
-  };
+  const agents: Agent[] = [];
+  const fundRows = await prisma.fund.findMany({ where: { worldId }, orderBy: { id: 'asc' } });
+  for (const f of fundRows) {
+    const profile = getFundProfileByName(f.name);
+    if (!profile) continue; // outside the registry: observed, never decides
+    agents.push({
+      fundId: f.id,
+      profile,
+      fund: await rebuildFund(f.id, market, profile.personality),
+      pending: false,
+      liquidated: f.liquidated,
+    });
+  }
+
+  live = { worldId, name: row.name, seed: row.seed, market, scheduler, events, agents };
   return live;
 }
 
@@ -264,14 +286,16 @@ async function tickWorld(w: World): Promise<void> {
     });
   }
 
-  // Decision cycle: on the cadence tick, non-blocking, one in flight at a
-  // time, never for a liquidated fund.
-  if (shouldFundDecide(next.tickCount, w.rivalPending, w.rivalLiquidated)) {
-    w.rivalPending = true;
-    void decideRival(w)
-      .catch((err) => console.error(`[world] ${w.name} decision failed`, err))
+  // Decision cycle: each fund on its own cadence slot, non-blocking, one call
+  // in flight per fund, never for a liquidated fund.
+  for (const agent of w.agents) {
+    const { decisionEveryTicks, decisionOffset } = agent.profile;
+    if (!shouldFundDecide(next.tickCount, agent.pending, agent.liquidated, decisionEveryTicks, decisionOffset)) continue;
+    agent.pending = true;
+    void decideFund(w, agent)
+      .catch((err) => console.error(`[world] ${agent.profile.name} decision failed`, err))
       .finally(() => {
-        w.rivalPending = false;
+        agent.pending = false;
       });
   }
 }
@@ -358,28 +382,35 @@ async function liquidateFunds(w: World): Promise<void> {
       }),
     ]);
 
-    if (fund.id === w.rivalFundId) {
-      w.rivalFund = { ...w.rivalFund, cash: closed.cash, positions: closed.positions };
-      w.rivalLiquidated = true;
+    const agent = w.agents.find((a) => a.fundId === fund.id);
+    if (agent) {
+      agent.fund = { ...agent.fund, cash: closed.cash, positions: closed.positions };
+      agent.liquidated = true;
     }
 
     console.log(`[world] ${w.name} fund ${fund.id} LIQUIDATED — ${cause}`);
   }
 }
 
-/** Persist the rival's state delta after a decision (fund cash + positions + log). */
-async function persistRivalState(w: World, before: RivalFund, after: RivalFund, decision: RivalDecision): Promise<void> {
+/** Persist a fund's state delta after a decision (fund cash + positions + log). */
+async function persistFundState(
+  w: World,
+  fundId: number,
+  before: RivalFund,
+  after: RivalFund,
+  decision: RivalDecision,
+): Promise<void> {
   const beforeKeys = new Set(before.positions.map((p) => positionKey(p.ticker, p.direction, p.entryTimestamp)));
   const afterKeys = new Set(after.positions.map((p) => positionKey(p.ticker, p.direction, p.entryTimestamp)));
   const added = after.positions.filter((p) => !beforeKeys.has(positionKey(p.ticker, p.direction, p.entryTimestamp)));
   const removed = before.positions.filter((p) => !afterKeys.has(positionKey(p.ticker, p.direction, p.entryTimestamp)));
 
   await prisma.$transaction([
-    prisma.fund.update({ where: { id: w.rivalFundId }, data: { cash: after.cash } }),
+    prisma.fund.update({ where: { id: fundId }, data: { cash: after.cash } }),
     ...added.map((p) =>
       prisma.position.create({
         data: {
-          fundId: w.rivalFundId,
+          fundId,
           ticker: p.ticker,
           direction: p.direction,
           quantity: p.quantity,
@@ -391,7 +422,7 @@ async function persistRivalState(w: World, before: RivalFund, after: RivalFund, 
     ...removed.map((p) =>
       prisma.position.updateMany({
         where: {
-          fundId: w.rivalFundId,
+          fundId,
           ticker: p.ticker,
           direction: p.direction,
           entryTimestamp: new Date(p.entryTimestamp),
@@ -406,7 +437,7 @@ async function persistRivalState(w: World, before: RivalFund, after: RivalFund, 
     prisma.rivalDecisionLog.create({
       data: {
         worldId: w.worldId,
-        fundId: w.rivalFundId,
+        fundId,
         action: decision.action,
         ticker: decision.ticker ?? null,
         reasoning: decision.reasoning,
@@ -421,29 +452,42 @@ async function persistRivalState(w: World, before: RivalFund, after: RivalFund, 
   ]);
 }
 
-/** The Phase 2 rival decision pipeline, now running on the server. */
-async function decideRival(w: World): Promise<void> {
-  const before = w.rivalFund;
+/** The fund's brain: its own prompt and model, with its rule-based policy as fallback. */
+function brainFor(profile: FundProfile): FundBrain {
+  return {
+    system: buildFundSystemPrompt(profile),
+    model: profile.model,
+    effort: MODEL_REGISTRY[profile.model].effort,
+    fallback: (input) => decideByPolicy(profile, input),
+  };
+}
+
+/** One fund's decision pipeline: decide (outside the lock), then apply + persist (inside). */
+async function decideFund(w: World, agent: Agent): Promise<void> {
+  const before = agent.fund;
   const input = buildDecisionInput(before, w.market, w.events, w.market.recentFlow);
-  // LLM when a key exists; the deterministic twin otherwise. makeLLMDecision
-  // also self-falls-back to the twin on any call/parse failure.
+  // LLM when a key exists; the fund's deterministic policy otherwise.
+  // makeLLMDecision also self-falls-back to that policy on any failure.
   //
   // The LLM call is deliberately OUTSIDE the world lock (multi-second latency
   // must not stall the market). The mutation and persistence below re-acquire
-  // the lock and re-read the current market so a trade/decision that resolved
+  // the lock and re-read the current market so a decision that resolved
   // against stale prices is never applied on top of fresher ones.
-  const decision: RivalDecision = ANTHROPIC_API_KEY
-    ? await makeLLMDecision(input, {
-        url: ANTHROPIC_URL,
-        headers: { 'x-api-key': ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' },
-      })
-    : makeRandomDecision(input);
+  const proposed: RivalDecision = ANTHROPIC_API_KEY
+    ? await makeLLMDecision(
+        input,
+        { url: ANTHROPIC_URL, headers: { 'x-api-key': ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' } },
+        brainFor(agent.profile),
+      )
+    : decideByPolicy(agent.profile, input);
+  // The model proposes; the fund's risk limit disposes.
+  const decision = enforceRiskLimit(proposed, input, agent.profile);
 
   await withWorldLock(async () => {
     // Liquidated while the LLM was thinking: the decision is void (D-019).
-    if (w.rivalLiquidated) return;
+    if (agent.liquidated) return;
     let market = w.market;
-    // The rival moves prices like any trader: applyTrade first.
+    // A fund moves prices like any trader: applyTrade first.
     if ((decision.action === 'buy' || decision.action === 'short') && decision.ticker && decision.dollarAmount) {
       const impacted = applyTrade(
         market,
@@ -456,8 +500,8 @@ async function decideRival(w: World): Promise<void> {
 
     const after = applyRivalDecision(before, decision, market);
     w.market = market;
-    w.rivalFund = after;
-    await persistRivalState(w, before, after, decision);
+    agent.fund = after;
+    await persistFundState(w, agent.fundId, before, after, decision);
   });
 }
 

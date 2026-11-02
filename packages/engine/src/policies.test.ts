@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { decideByPolicy } from './policies';
+import { decideByPolicy, enforceRiskLimit } from './policies';
 import { getFundProfile, type FundProfile } from './funds';
 import { createInitialMarket } from './market';
 import { openPosition } from './portfolio';
@@ -160,6 +160,14 @@ describe('decideByPolicy', () => {
     const d = decideByPolicy(contrarian, input(fresh('contrarian'), flatMarket(), [], { HELX: 9_000_000 }));
     expect(d.action).toBe('short');
     expect(d.dollarAmount).toBeLessThanOrEqual(CAPITAL * 0.05);
+  });
+
+  it('enforceRiskLimit clamps an oversized LLM proposal and leaves closes alone', () => {
+    const i = input(fresh('quant'), flatMarket());
+    const big = enforceRiskLimit({ action: 'buy', ticker: 'NOVA', dollarAmount: 9_000_000, reasoning: 'all in', confidence: 0.9 }, i, QUANT);
+    expect(big.dollarAmount).toBe(CAPITAL * QUANT.maxPositionFraction);
+    const close = { action: 'close' as const, ticker: 'NOVA', reasoning: 'out', confidence: 0.5 };
+    expect(enforceRiskLimit(close, i, QUANT)).toBe(close);
   });
 
   it('with zero available cash, never opens — but still closes', () => {

@@ -38,7 +38,7 @@ import {
 
 export function decideByPolicy(profile: FundProfile, input: RivalDecisionInput): RivalDecision {
   const decision = pickPolicy(profile)(input, profile);
-  return capSize(decision, input, profile);
+  return enforceRiskLimit(decision, input, profile);
 }
 
 type Policy = (input: RivalDecisionInput, profile: FundProfile) => RivalDecision;
@@ -71,8 +71,12 @@ function sizeFor(input: RivalDecisionInput, profile: FundProfile): number {
   return size >= POLICY_MIN_TRADE_DOLLARS ? size : 0;
 }
 
-/** Clamp any opening decision to the fund's risk limit; drop it if unaffordable. */
-function capSize(decision: RivalDecision, input: RivalDecisionInput, profile: FundProfile): RivalDecision {
+/**
+ * Clamp any opening decision to the fund's risk limit; turn it into a hold if
+ * the fund cannot afford a trade. Applied to policy AND model decisions: the
+ * LLM proposes, the fund's limits dispose. Closes and holds pass unchanged.
+ */
+export function enforceRiskLimit(decision: RivalDecision, input: RivalDecisionInput, profile: FundProfile): RivalDecision {
   if (decision.action !== 'buy' && decision.action !== 'short') return decision;
   const cap = sizeFor(input, profile);
   if (cap === 0) return hold(`${decision.ticker ?? 'Signal'} noted, but no capital is free for a new position.`);
