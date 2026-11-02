@@ -41,6 +41,7 @@ import { BudgetLedger, estimateCallCostUsd } from './budget';
 import { anthropicCreate, runDecisionLoop, type CreateMessage, type LoopResult } from './providers/anthropic';
 import { jevConfigFromEnv, proposeWithJev, resolveDirectorMode } from './providers/jev';
 import {
+  activeFundsWhere,
   addMissingCompanies,
   enginePositionFromRow,
   engineFundFromRows,
@@ -274,10 +275,10 @@ async function loadLiveWorld(): Promise<World> {
   }));
 
   const agents: Agent[] = [];
-  const fundRows = await prisma.fund.findMany({ where: { worldId }, orderBy: { id: 'asc' } });
+  const fundRows = await prisma.fund.findMany({ where: activeFundsWhere(worldId), orderBy: { id: 'asc' } });
   for (const f of fundRows) {
     const profile = getFundProfileByName(f.name);
-    if (!profile) continue; // outside the registry: observed, never decides
+    if (!profile) continue;
     agents.push({
       fundId: f.id,
       profile,
@@ -390,7 +391,7 @@ async function tickWorld(w: World): Promise<void> {
  * Cheap: one read + at most one write per fund per tick.
  */
 async function trackPeakNav(w: World): Promise<{ fundId: number; nav: number; grossExposure: number }[]> {
-  const funds = await prisma.fund.findMany({ where: { worldId: w.worldId } });
+  const funds = await prisma.fund.findMany({ where: activeFundsWhere(w.worldId) });
   const marks: { fundId: number; nav: number; grossExposure: number }[] = [];
   for (const f of funds) {
     const open = await prisma.position.findMany({ where: { fundId: f.id, closedAt: null } });
@@ -467,7 +468,7 @@ async function directorCycle(w: World, market: MarketState, eventFiredThisTick: 
  */
 async function liquidateFunds(w: World): Promise<void> {
   const funds = await prisma.fund.findMany({
-    where: { worldId: w.worldId, liquidated: false },
+    where: { ...activeFundsWhere(w.worldId), liquidated: false },
   });
 
   for (const fund of funds) {

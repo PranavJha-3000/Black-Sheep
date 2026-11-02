@@ -4,7 +4,7 @@ import { wrap } from './auth';
 import { agentObservation, currentDirectorMode, ensureLiveWorld } from './world';
 import { buildAnalytics, type AnalyticsFundInput } from './analyticsCore';
 import { getFundProfileByName } from '@black-sheep/engine/funds';
-import { buildWorldStatePayload, type FundInput } from './worldCore';
+import { activeFundsWhere, buildWorldStatePayload, type FundInput } from './worldCore';
 import { buildActivity, buildFundTrace, parseFundId, type CallRowInput, type DecisionRowInput } from './observerCore';
 import { ANALYTICS_EVENT_LIMIT, ANALYTICS_NAV_POINTS, OBSERVER_ACTIVITY_LIMIT, OBSERVER_TRACE_LIMIT } from '../config/game';
 
@@ -22,7 +22,7 @@ worldRouter.get(
   wrap(async (_req, res) => {
     const w = await ensureLiveWorld();
 
-    const funds = await prisma.fund.findMany({ where: { worldId: w.worldId }, orderBy: { id: 'asc' } });
+    const funds = await prisma.fund.findMany({ where: activeFundsWhere(w.worldId), orderBy: { id: 'asc' } });
     const fundInputs: FundInput[] = [];
     for (const f of funds) {
       const openPositions = await prisma.position.findMany({ where: { fundId: f.id, closedAt: null } });
@@ -88,7 +88,7 @@ worldRouter.get(
   wrap(async (req, res) => {
     const w = await ensureLiveWorld();
     const id = parseFundId(req.params.id);
-    const fund = id === null ? null : await prisma.fund.findFirst({ where: { id, worldId: w.worldId } });
+    const fund = id === null ? null : await prisma.fund.findFirst({ where: { id, ...activeFundsWhere(w.worldId) } });
     if (!fund) {
       res.status(404).json({ error: 'fund not found' });
       return;
@@ -185,7 +185,7 @@ worldRouter.get(
   '/analytics',
   wrap(async (_req, res) => {
     const w = await ensureLiveWorld();
-    const funds = await prisma.fund.findMany({ where: { worldId: w.worldId }, orderBy: { id: 'asc' } });
+    const funds = await prisma.fund.findMany({ where: activeFundsWhere(w.worldId), orderBy: { id: 'asc' } });
     const inputs: AnalyticsFundInput[] = [];
     for (const f of funds) {
       const [snaps, positions, bySource, policyAfterCall, byOutcome, toolCalls] = await Promise.all([

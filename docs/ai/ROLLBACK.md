@@ -1,5 +1,12 @@
 # Rollback
 
+## Retire APEX + audit fixes · 2026-11-02
+Safe commit: `149d83b` (main). Work lives on branch `chore/retire-apex-audit`.
+Revert with: `git revert -m 1 <merge commit>`, then `npm install` to restore the previous lockfile's `qs`/`deepmerge-ts`.
+Files touched: `server/{world,worldCore,worldCore.test,worldRoutes}.ts`, `package.json` (`overrides`), `package-lock.json`, `docs/**`.
+Non-code changes to undo: none — no schema change, no data deleted. The deleted local branch `wip/stage2-global-world` was `2ab185d` (never pushed); restore with `git branch wip/stage2-global-world 2ab185d` while the object survives.
+Re-check after rollback: `npm run typecheck`; `npm test`; `npm run lint`; `npm run build`; `npx prisma validate`.
+
 ## Stage 7 metrics + World Director · 2026-11-02
 Safe commit: `438600d` (main). Work lives on branch `feat/stage7-metrics-director`.
 Revert with: `git switch main` (branch unmerged), or after merge `git revert -m 1 <merge commit>`.

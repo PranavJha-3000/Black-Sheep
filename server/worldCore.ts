@@ -168,6 +168,15 @@ export function shouldFundDecide(
  * in-world identity). Funds in the world that the registry does not list are
  * left alone: they stay observable but never decide.
  */
+/**
+ * The Prisma filter for a world's active funds (D-030). A fund whose name is
+ * not in the registry (Stage 2's APEX CAPITAL) is retired: it is no longer
+ * marked to market, liquidated, shown or analysed. Its rows stay as history.
+ */
+export function activeFundsWhere(worldId: number): { worldId: number; name: { in: string[] } } {
+  return { worldId, name: { in: FUND_PROFILES.map((p) => p.name) } };
+}
+
 export function missingRegistryFunds(existingNames: string[]): FundProfile[] {
   const have = new Set(existingNames);
   return FUND_PROFILES.filter((p) => !have.has(p.name));
