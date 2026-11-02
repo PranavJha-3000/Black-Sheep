@@ -171,6 +171,25 @@ describe('worldCore', () => {
     });
   });
 
+  describe('buildWorldStatePayload metering', () => {
+    it('exposes each fund’s spend and the source of its last decision', () => {
+      const p = buildWorldStatePayload({ name: 'live', seed: 1 }, createInitialMarket(), [
+        fund(1, {
+          name: 'CROWN MERIDIAN',
+          spend: { todayUsd: 0.42, dailyBudgetUsd: 2 },
+          lastDecision: {
+            action: 'hold', ticker: null, reasoning: 'r', confidence: 0.5, fillPrice: null, realizedPnL: null,
+            tickCountAt: 6, timestamp: new Date(0), source: 'llm', model: 'claude-opus-5-5',
+          },
+        }),
+        fund(2),
+      ], []);
+      expect(p.funds[0].spend).toEqual({ todayUsd: 0.42, dailyBudgetUsd: 2 });
+      expect(p.funds[0].lastDecision).toMatchObject({ source: 'llm', model: 'claude-opus-5-5' });
+      expect(p.funds[1].spend).toBeNull();
+    });
+  });
+
   describe('buildWorldStatePayload', () => {
     it('renders an empty world before its first fund or event', () => {
       const market = createInitialMarket();

@@ -6,7 +6,7 @@
  *
  * Two decision backends share this shell:
  *   - makeRandomDecision()  : deterministic rule-based twin (placeholder)
- *   - makeLLMDecision()     : async LLM brain (rivalLLM.ts)
+ *   - the model brain       : server/providers/anthropic.ts (prompt in rivalLLM.ts)
  * Both feed applyRivalDecision(), which routes through the SAME openPosition/
  * closePosition the player uses - no special-cased rival math.
  */

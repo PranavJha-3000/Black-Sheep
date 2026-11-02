@@ -212,6 +212,16 @@ export interface ObservedDecision {
   realizedPnL: number | null;
   tickCountAt: number | null;
   at: string;
+  /** 'llm' | 'policy' | 'budget' — where the decision came from (D-025). */
+  source: string;
+  /** Model that served an 'llm' decision; null otherwise. */
+  model: string | null;
+}
+
+/** Provider spend for one fund today vs its daily budget (VISION §12). */
+export interface ObservedSpend {
+  todayUsd: number;
+  dailyBudgetUsd: number;
 }
 
 /** The public face of a registered fund (null for funds outside the registry). */
@@ -227,6 +237,8 @@ export interface ObservedFund {
   id: number;
   name: string;
   profile: ObservedProfile | null;
+  /** Null for funds outside the registry (they never call a model). */
+  spend: ObservedSpend | null;
   cash: number;
   startingCapital: number;
   nav: number;
@@ -267,6 +279,7 @@ export interface FundInput {
   liquidated: boolean;
   liquidationCause: string | null;
   thinking: boolean;
+  spend?: ObservedSpend | null;
   openPositions: PositionRow[];
   lastDecision: {
     action: string;
@@ -277,6 +290,8 @@ export interface FundInput {
     realizedPnL: number | null;
     tickCountAt: number | null;
     timestamp: Date;
+    source?: string;
+    model?: string | null;
   } | null;
 }
 
@@ -340,6 +355,7 @@ export function buildWorldStatePayload(
               model: profile.model,
             }
           : null,
+        spend: f.spend ? { todayUsd: f.spend.todayUsd, dailyBudgetUsd: f.spend.dailyBudgetUsd } : null,
         cash: f.cash,
         startingCapital: f.startingCapital,
         nav: Math.max(1, markToMarket(ef, market).nav),
@@ -374,6 +390,8 @@ export function buildWorldStatePayload(
               realizedPnL: f.lastDecision.realizedPnL,
               tickCountAt: f.lastDecision.tickCountAt,
               at: f.lastDecision.timestamp.toISOString(),
+              source: f.lastDecision.source ?? 'policy',
+              model: f.lastDecision.model ?? null,
             }
           : null,
       };
