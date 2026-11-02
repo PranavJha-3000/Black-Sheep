@@ -23,10 +23,10 @@ model User {
 // named "live" (D-016). The seed is chosen once at creation and persisted so a
 // restart resumes the same world instead of reseeding it (D-018).
 model World {
-  id           Int                @id @default(autoincrement())
-  name         String             @unique
+  id           Int                   @id @default(autoincrement())
+  name         String                @unique
   seed         Int
-  createdAt    DateTime           @default(now())
+  createdAt    DateTime              @default(now())
   funds        Fund[]
   ticks        MarketTick[]
   events       MarketEventLog[]
@@ -34,6 +34,8 @@ model World {
   liquidations LiquidationLog[]
   llmCalls     LlmCallLog[]
   memories     AgentMemory[]
+  navSnapshots FundNavSnapshot[]
+  director     DirectorDecisionLog[]
 }
 
 model Fund {
@@ -56,6 +58,7 @@ model Fund {
   liquidations    LiquidationLog[]
   llmCalls        LlmCallLog[]
   memories        AgentMemory[]
+  navSnapshots    FundNavSnapshot[]
 
   @@unique([worldId, name])
 }
@@ -224,4 +227,38 @@ model AgentMemory {
   outcomeUsd  Float?
 
   @@index([fundId, id])
+}
+
+// Every fund's NAV at each market snapshot tick (D-028): the series the
+// performance metrics (return, drawdown, volatility, Sharpe) are computed from.
+model FundNavSnapshot {
+  id            Int      @id @default(autoincrement())
+  worldId       Int
+  world         World    @relation(fields: [worldId], references: [id], onDelete: Cascade)
+  fundId        Int
+  fund          Fund     @relation(fields: [fundId], references: [id], onDelete: Cascade)
+  timestamp     DateTime @default(now())
+  tickCountAt   Int
+  nav           Float
+  grossExposure Float
+
+  @@index([fundId, id])
+}
+
+// Every World Director cycle (D-029), including "no intervention", so the
+// none / rule / jev configurations can be compared (VISION §8).
+model DirectorDecisionLog {
+  id            Int      @id @default(autoincrement())
+  worldId       Int
+  world         World    @relation(fields: [worldId], references: [id], onDelete: Cascade)
+  timestamp     DateTime @default(now())
+  tickCountAt   Int
+  mode          String
+  kind          String
+  sector        String?
+  rationale     String
+  applied       Boolean
+  eventHeadline String?
+
+  @@index([worldId, id])
 }
