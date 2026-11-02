@@ -18,21 +18,6 @@ Side effects: Postgres writes; one Anthropic call per rival decision (when key p
 Fragile: Express 4 async routes need `wrap()`; the world clock keeps running through per-room errors (logged, not thrown).
 Watch: `liquidatePlayerFunds` runs inside the room lock (serialized with trades/ticks); a player closing their tab CANNOT dodge liquidation — it is evaluated and persisted entirely server-side.
 
-## Result-card endpoints (Phase 3 — shareable outcome cards)
-Entry: `server/resultCard.ts → resultCardRouter`
-
-1. `GET /funds/:id/result-card` (public, no auth) → `buildResultCard(fundId)`:
-   - Load fund + ensure world (live market)
-   - Compute current NAV from open positions at market prices
-   - Load latest `LiquidationLog` (if any)
-   - Scan all closed positions for best single trade (highest PnL)
-   - Return JSON: `{ fundId, name, startingCapital, peakNav, finalNav, cause, rivalContext, durationTicks, bestSingleTrade, liquidated }`
-2. `GET /funds/:id/result-card.png` (public, no auth) → same `buildResultCard`, then render a 1200×630 PNG via `@vercel/og` `ImageResponse` using `React.createElement` (dark terminal aesthetic, NAV/cause/PnL layout). Returns `Content-Type: image/png` with 30s cache.
-
-Assumptions: fundId is not easily guessable enough to be a concern for V1 (auto-increment int); the payload never exposes positions/cash (information firewall holds for unauthenticated viewers).
-Side effects: read-only (no writes). One `ensureWorld` call per request.
-Fragile: `@vercel/og` uses `satori` + `@resvg/resvg-wasm`; no custom fonts bundled (satori default). If the user wants exact JetBrains Mono, they need to load a TTF and pass it via the `fonts` option.
-
 ## Room lifecycle (REST)
 Entry: `server/rooms.ts`
 

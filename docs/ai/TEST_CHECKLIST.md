@@ -32,11 +32,11 @@ Run before any change counts as done.
 - [ ] (Needs DB) `docker exec black-sheep-pg psql -U postgres -d black_sheep -c '\dt'` → 8 tables now (added `LiquidationLog`)
 - [ ] (Needs DB) crowd a short so a fund breaches maintenance margin → within one tick the server force-closes ALL its positions at market price, sets `Fund.liquidated=true`, and writes a `LiquidationLog` row — with the browser tab CLOSED (proves it's server-authoritative, not client-triggered)
 - [ ] (Needs DB) the `LiquidationLog.cause` reads `Excessive concentration in <TKR>` or `Excessive leverage`; `rivalContext` is populated when a recent rival decision was confrontational (e.g. "Liquidated shortly after APEX CAPITAL went short NOVA — directly against your position"), else null
-- [ ] (Needs DB) `GET /funds/:id/result-card` → JSON `{fundId,name,startingCapital,peakNav,finalNav,cause,rivalContext,durationTicks,bestSingleTrade,liquidated}`; works for a LIVE (non-liquidated) fund too (`cause: "Still trading"`)
-- [ ] (Needs DB) `GET /funds/:id/result-card.png` → `Content-Type: image/png`, 1200×630, dark terminal aesthetic with NAV/cause/PnL; a fund UP 300% renders just as validly as one that blew up
-- [ ] (Needs DB) result-card endpoints return data with NO auth token and expose NO positions/cash (firewall holds for unauthenticated viewers)
-- [ ] UI: sidebar `FundSummaryPanel` always shows NAV/PnL/positions + SHARE button; clicking SHARE copies `http://localhost:3001/funds/<id>/result-card` to clipboard and flips to "COPIED ✓"
-- [ ] UI: on liquidation, `LiquidationScreen` shows the cause, the rival-context line (when present), and a green SHARE RESULT button alongside START AGAIN
+- ~~REMOVED Stage 1 (result cards)~~ (Needs DB) `GET /funds/:id/result-card` → JSON `{fundId,name,startingCapital,peakNav,finalNav,cause,rivalContext,durationTicks,bestSingleTrade,liquidated}`; works for a LIVE (non-liquidated) fund too (`cause: "Still trading"`)
+- ~~REMOVED Stage 1 (result cards)~~ (Needs DB) `GET /funds/:id/result-card.png` → `Content-Type: image/png`, 1200×630, dark terminal aesthetic with NAV/cause/PnL; a fund UP 300% renders just as validly as one that blew up
+- ~~REMOVED Stage 1 (result cards)~~ (Needs DB) result-card endpoints return data with NO auth token and expose NO positions/cash (firewall holds for unauthenticated viewers)
+- [ ] UI: sidebar `FundSummaryPanel` always shows NAV/PnL/positions (SHARE removed in Stage 1)
+- [ ] UI: on liquidation, `LiquidationScreen` shows the cause, the rival-context line (when present), and START AGAIN (SHARE RESULT removed in Stage 1)
 
 
 ### Phase 4 — frontend on the backend (this turn)

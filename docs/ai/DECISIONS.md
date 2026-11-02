@@ -106,6 +106,7 @@
 **Revisit if:** Liquidation must trigger mid-tick (before other funds are evaluated in the same pass) or realized-PnL accounting needs the engine `history` array rather than the scalar `peakNav`.
 
 ### D-013 · 2026-09-13 · Claude (Cline)
+**Superseded 2026-11-02 by D-015** (result cards and `@vercel/og` removed).
 **Decision:** Result cards are served by two PUBLIC (unauthenticated) endpoints — `GET /funds/:id/result-card` (JSON) and `GET /funds/:id/result-card.png` (1200×630 PNG rendered via `@vercel/og` `ImageResponse`). The image is built with `React.createElement` objects (no JSX, since the server has no build step for tsx) in the terminal aesthetic (dark bg, mono font, green/red NAV, cause-of-death + rival-context). The SHARE button on both `FundSummaryPanel` (always-accessible sidebar) and `LiquidationScreen` copies the JSON card URL to the clipboard.
 **Context:** The prompt asked for the cheapest legitimate distribution mechanic — real player outcomes, not synthetic virality — shareable at any NAV (a fund up 300% is as shareable as one that blew up).
 **Reasoning:** "The link is the share" — a shareable card must be openable by anyone who sees the URL, so auth would break the whole mechanic. The payload is intentionally aggregate-only (NAV/peak/cause/best-trade) so the information firewall holds even for unauthenticated viewers. `@vercel/og` is purpose-built for OG cards and needs no native Cairo deps (unlike `node-canvas`, which is fragile on Windows); satori's default font keeps it dependency-free, with a TTF-load upgrade path noted.
