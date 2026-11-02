@@ -5,7 +5,7 @@
  * RivalDecisionInput / RivalDecision shell as makeRandomDecision(). It calls
  * the provider endpoint the SERVER supplies (the API key never leaves the
  * server), parses the JSON response defensively, and FALLS BACK
- * to makeRandomDecision() on any failure so the game never stalls on a hiccup.
+ * to the brain's deterministic policy on any failure so the world never stalls.
  *
  * The system prompt is the craft: persona, the crowded-trade thesis, event
  * awareness, and a hard instruction to emit ONLY strict JSON (with an in-prompt
@@ -14,6 +14,8 @@
 
 import { makeRandomDecision } from './rival';
 import type { RivalDecision, RivalDecisionInput } from './rival';
+import type { FundProfile } from './funds';
+import { DEFAULT_FUND_MODEL, MODEL_REGISTRY } from '../../../config/models';
 
 // ---------------------------------------------------------------------------
 // Endpoint
@@ -35,20 +37,8 @@ export interface LLMEndpointOptions {
 // Prompt
 // ---------------------------------------------------------------------------
 
-export const RIVAL_SYSTEM_PROMPT = `You are the portfolio manager of APEX CAPITAL, a contrarian hedge fund. You are terse, confident, and slightly arrogant. You move against the crowd because crowded trades tend to unwind.
-
-You observe a live market. For each ticker you know: current price, recent % change, recent MarketEvents (earnings, news, macro), and net flow (signed dollars of buying vs selling pressure over the recent window - heavy positive flow means a trade is crowded long). You also have a vague read on the rival player's sector lean (heavy_tech / heavy_short / unknown), inferred only from aggregate flow.
-
-You manage your own long/short book and available cash, which you can see in full. You NEVER see the rival player's actual positions or exact cash - that information is hidden from you. Decide ONE action.
-
-Rules:
-- Fade crowded trades: heavy positive net flow leans you toward SHORT; heavy negative flow leans you toward BUY.
-- Use recent MarketEvents for event-driven opportunities (a beat + flow = momentum you might ride briefly; a miss + flow = potential fade).
-- You may CLOSE an existing position (use its ticker) or HOLD.
-- Keep sizing reasonable relative to your available cash - do not bet the entire fund on one idea.
-- Brevity is a design goal. Your reasoning MUST be 1-2 sentences, not an essay.
-
-CRITICAL: respond with ONLY a single JSON object, no prose before or no prose after, no markdown fences. Match this exact shape:
+/** The response contract every fund's system prompt ends with. */
+const JSON_CONTRACT = `CRITICAL: respond with ONLY a single JSON object, no prose before or no prose after, no markdown fences. Match this exact shape:
 {"action":"buy|short|close|hold","ticker":"TICKER","dollarAmount":1234567,"reasoning":"One or two short sentences.","confidence":0.0}
 
 - action is required. For "hold" you may omit ticker and dollarAmount.
@@ -58,6 +48,39 @@ CRITICAL: respond with ONLY a single JSON object, no prose before or no prose af
 
 Example correct response:
 {"action":"short","ticker":"NOVA","dollarAmount":1800000,"reasoning":"Crowded long on NOVA with +$8M flow; fading the momentum before it unwinds.","confidence":0.82}`;
+
+/** What every fund can and cannot see (the information firewall, in prose). */
+const MARKET_VIEW = `You observe a live market shared with other AI funds. For each ticker you know: current price, recent % change, recent MarketEvents (earnings, news, macro), and net flow (signed dollars of buying vs selling pressure over the recent window - heavy positive flow means a trade is crowded long). You also get a vague aggregate-flow lean (heavy_tech / heavy_short / unknown).
+
+You manage your own long/short book and available cash, which you can see in full. You NEVER see another fund's positions or cash. Decide ONE action: BUY, SHORT, CLOSE an existing position (use its ticker) or HOLD. Your reasoning MUST be 1-2 sentences.`;
+
+export const RIVAL_SYSTEM_PROMPT = `You are the portfolio manager of APEX CAPITAL, a contrarian hedge fund. You are terse, confident, and slightly arrogant. You move against the crowd because crowded trades tend to unwind.
+
+${MARKET_VIEW}
+
+Rules:
+- Fade crowded trades: heavy positive net flow leans you toward SHORT; heavy negative flow leans you toward BUY.
+- Use recent MarketEvents for event-driven opportunities (a beat + flow = momentum you might ride briefly; a miss + flow = potential fade).
+- Keep sizing reasonable relative to your available cash - do not bet the entire fund on one idea.
+
+${JSON_CONTRACT}`;
+
+/** The system prompt for a registered fund: its identity, mandate and limits. */
+export function buildFundSystemPrompt(profile: FundProfile): string {
+  return `You are the portfolio manager of ${profile.name}, an AI hedge fund.
+
+Mandate: ${profile.mandate}
+Strategy: ${profile.strategy}
+
+${MARKET_VIEW}
+
+Rules:
+- Stay true to your mandate and strategy; do not drift into another fund's style.
+- Never size a new position above ${Math.round(profile.maxPositionFraction * 100)}% of your available cash.
+- HOLD is a legitimate decision when nothing fits your strategy.
+
+${JSON_CONTRACT}`;
+}
 
 export function buildRivalUserMessage(input: RivalDecisionInput): string {
   const own = input.ownFund;
@@ -85,7 +108,7 @@ export function buildRivalUserMessage(input: RivalDecisionInput): string {
     }
   }
   lines.push('');
-  lines.push(`Estimated player lean: ${input.estimatedPlayerSectorExposure}.`);
+  lines.push(`Aggregate flow lean: ${input.estimatedPlayerSectorExposure}.`);
   lines.push('Decide now. Reply with ONLY the JSON object.');
   return lines.join('\n');
 }
@@ -133,9 +156,11 @@ function extractText(data: unknown): string {
     const obj = data as Record<string, unknown>;
     if (typeof obj.content === 'string') return obj.content;
     if (Array.isArray(obj.content)) {
-      const first = obj.content[0];
-      if (first && typeof first === 'object' && typeof (first as Record<string, unknown>).text === 'string') {
-        return (first as Record<string, unknown>).text as string;
+      // Models that think emit thinking blocks before the text block.
+      for (const block of obj.content) {
+        if (block && typeof block === 'object' && typeof (block as Record<string, unknown>).text === 'string') {
+          return (block as Record<string, unknown>).text as string;
+        }
       }
     }
     if (Array.isArray(obj.choices)) {
@@ -179,19 +204,42 @@ function isRivalDecision(value: unknown): value is RivalDecision {
 // Public API
 // ---------------------------------------------------------------------------
 
+/** Who is deciding: the fund's prompt, model, effort and no-model fallback. */
+export interface FundBrain {
+  system: string;
+  model: string;
+  effort: 'low' | 'medium' | 'high';
+  fallback: (input: RivalDecisionInput) => RivalDecision;
+}
+
+const DEFAULT_BRAIN: FundBrain = {
+  system: RIVAL_SYSTEM_PROMPT,
+  model: DEFAULT_FUND_MODEL,
+  effort: MODEL_REGISTRY[DEFAULT_FUND_MODEL].effort,
+  fallback: makeRandomDecision,
+};
+
 /**
- * Ask the LLM for a rival decision. Never throws - any failure (network, HTTP,
- * malformed JSON) falls back to the deterministic rule-based twin so the game
- * keeps running. Returns the parsed RivalDecision.
+ * Output budget per decision. Current models think before answering, so the
+ * budget covers thinking at the brain's effort plus a ~100-token JSON answer.
+ */
+const MAX_TOKENS = 2048;
+
+/**
+ * Ask the LLM for a fund decision. Never throws - any failure (network, HTTP,
+ * refusal, malformed JSON) falls back to the brain's deterministic policy so
+ * the world keeps running. Returns the parsed RivalDecision.
  */
 export async function makeLLMDecision(
   input: RivalDecisionInput,
   endpoint: LLMEndpointOptions,
+  brain: FundBrain = DEFAULT_BRAIN,
 ): Promise<RivalDecision> {
   const body = {
-    model: 'claude-sonnet-4-6',
-    max_tokens: 300,
-    system: RIVAL_SYSTEM_PROMPT,
+    model: brain.model,
+    max_tokens: MAX_TOKENS,
+    system: brain.system,
+    output_config: { effort: brain.effort },
     messages: [{ role: 'user', content: buildRivalUserMessage(input) }],
   };
 
@@ -205,6 +253,9 @@ export async function makeLLMDecision(
       throw new Error(`LLM proxy HTTP ${res.status}`);
     }
     const data: unknown = await res.json();
+    if (data && typeof data === 'object' && (data as Record<string, unknown>).stop_reason === 'refusal') {
+      throw new Error('LLM refused');
+    }
     const raw = extractText(data);
     if (!raw) throw new Error('LLM response had no text');
     const cleaned = stripFences(raw);
@@ -227,8 +278,8 @@ export async function makeLLMDecision(
       globalThis as unknown as { process?: { env?: Record<string, string> } }
     ).process;
     if (nodeProcess?.env?.NODE_ENV !== 'test') {
-      console.warn('[rivalLLM] LLM call failed, falling back to rule-based twin:', err);
+      console.warn('[rivalLLM] LLM call failed, falling back to rule-based policy:', err);
     }
-    return makeRandomDecision(input);
+    return brain.fallback(input);
   }
 }

@@ -49,6 +49,10 @@ const COMPANY_SEEDS: SeedSpec[] = [
   { ticker: 'HELX', name: 'HELIX SYSTEMS', sector: 'biotech', price: 61.28, volatility: 0.06, beta: 1.6, rateSensitivity: 0.5, liquidity: 40_000_000 },
   { ticker: 'APXB', name: 'APEX BANK', sector: 'finance', price: 34.9, volatility: 0.008, beta: 0.7, rateSensitivity: 1.6, liquidity: 1_200_000_000 },
   { ticker: 'PULSE', name: 'PULSE', sector: 'consumer', price: 118.27, volatility: 0.006, beta: 0.5, rateSensitivity: 0.4, liquidity: 800_000_000 },
+  { ticker: 'VOLT', name: 'VOLTARIS ENERGY', sector: 'energy', price: 72.55, volatility: 0.025, beta: 1.1, rateSensitivity: 0.9, liquidity: 300_000_000 },
+  { ticker: 'FORGE', name: 'FORGE INDUSTRIES', sector: 'industrial', price: 156.4, volatility: 0.012, beta: 0.9, rateSensitivity: 1.0, liquidity: 500_000_000 },
+  { ticker: 'CURA', name: 'CURA THERAPEUTICS', sector: 'biotech', price: 28.73, volatility: 0.05, beta: 1.5, rateSensitivity: 0.5, liquidity: 60_000_000 },
+  { ticker: 'LEDG', name: 'LEDGER TRUST', sector: 'finance', price: 51.12, volatility: 0.01, beta: 0.8, rateSensitivity: 1.4, liquidity: 900_000_000 },
 ];
 export function createInitialMarket(): MarketState {
   const companies: Record<Ticker, Company> = {};

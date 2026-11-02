@@ -8,7 +8,7 @@ export type Ticker = string;
 
 export type Direction = 'long' | 'short';
 
-export type Sector = 'tech' | 'auto' | 'space' | 'finance' | 'consumer' | 'biotech';
+export type Sector = 'tech' | 'auto' | 'space' | 'finance' | 'consumer' | 'biotech' | 'energy' | 'industrial';
 
 export interface Company {
   ticker: Ticker;

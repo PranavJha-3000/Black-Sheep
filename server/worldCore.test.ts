@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { createInitialMarket } from '@black-sheep/engine/market';
 import { initialScheduler } from '@black-sheep/engine/events';
 import {
+  addMissingCompanies,
   buildWorldStatePayload,
+  missingRegistryFunds,
   parseWorldSnapshot,
   resolveWorldSeed,
   shouldFundDecide,
@@ -107,6 +109,65 @@ describe('worldCore', () => {
       expect(shouldFundDecide(11, false, false)).toBe(false);
       expect(shouldFundDecide(10, true, false)).toBe(false);
       expect(shouldFundDecide(10, false, true)).toBe(false);
+    });
+  });
+
+  describe('shouldFundDecide with a per-fund cadence', () => {
+    it('fires on tickCount % every === offset', () => {
+      expect(shouldFundDecide(13, false, false, 10, 3)).toBe(true);
+      expect(shouldFundDecide(3, false, false, 10, 3)).toBe(true);
+      expect(shouldFundDecide(10, false, false, 10, 3)).toBe(false);
+      expect(shouldFundDecide(16, false, false, 10, 6)).toBe(true);
+    });
+
+    it('a pending or liquidated fund skips its own slot only', () => {
+      expect(shouldFundDecide(13, true, false, 10, 3)).toBe(false);
+      expect(shouldFundDecide(13, false, true, 10, 3)).toBe(false);
+      expect(shouldFundDecide(16, false, false, 10, 6)).toBe(true);
+    });
+
+    it('never fires at tick 0', () => {
+      expect(shouldFundDecide(0, false, false, 10, 0)).toBe(false);
+    });
+  });
+
+  describe('missingRegistryFunds', () => {
+    it('lists registry funds absent from the world, ignoring unknown funds', () => {
+      const missing = missingRegistryFunds(['APEX CAPITAL', 'STERLING & VALE']);
+      expect(missing.map((p) => p.key)).toEqual(['halden-whitmore', 'crown-meridian']);
+      expect(missingRegistryFunds(['STERLING & VALE', 'HALDEN WHITMORE', 'CROWN MERIDIAN'])).toEqual([]);
+    });
+  });
+
+  describe('addMissingCompanies', () => {
+    it('adds newly listed companies to an old snapshot without touching existing prices', () => {
+      const m = createInitialMarket();
+      const old = { ...m, companies: { NOVA: { ...m.companies.NOVA, price: 999 } } };
+      const merged = addMissingCompanies(old);
+      expect(Object.keys(merged.companies)).toHaveLength(10);
+      expect(merged.companies.NOVA.price).toBe(999);
+      expect(merged.companies.VOLT.price).toBe(m.companies.VOLT.price);
+    });
+
+    it('returns the same market when nothing is missing', () => {
+      const m = createInitialMarket();
+      expect(addMissingCompanies(m)).toBe(m);
+    });
+  });
+
+  describe('buildWorldStatePayload profiles', () => {
+    it('exposes the public profile of a registered fund and null for others', () => {
+      const p = buildWorldStatePayload({ name: 'live', seed: 1 }, createInitialMarket(), [
+        fund(1, { name: 'APEX CAPITAL' }),
+        fund(2, { name: 'CROWN MERIDIAN' }),
+      ], []);
+      expect(p.funds[0].profile).toBeNull();
+      expect(p.funds[1].profile).toMatchObject({
+        key: 'crown-meridian',
+        personality: 'quant',
+        model: 'claude-opus-5-5',
+      });
+      expect(p.funds[1].profile?.mandate.length).toBeGreaterThan(0);
     });
   });
 

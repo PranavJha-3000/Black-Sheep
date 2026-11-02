@@ -4,13 +4,14 @@
  */
 import { create } from 'zustand';
 import { createFund } from '@black-sheep/engine/portfolio';
+import { createInitialMarket } from '@black-sheep/engine/market';
 import type { Fund } from '@black-sheep/engine/portfolio';
 import type { RiskLabel } from './derive';
 import type { Ticker, Company, MarketEvent } from '@black-sheep/engine/types';
 import type { RivalFund } from '@black-sheep/engine/rival';
 import { apiFetch } from './api';
 import { projectState } from './stateMapper';
-import type { ProjectionPrev } from './stateMapper';
+import type { FundSummary, ProjectionPrev } from './stateMapper';
 import type { WorldStatePayload } from '../../server/worldCore';
 import { STARTING_CAPITAL } from '../../config/game';
 
@@ -49,6 +50,8 @@ export interface GameStoreState {
   liquidationCause: string | null;
   priceHistory: Record<Ticker, number[]>;
   navHistory: number[];
+  /** Every fund in the world, for the funds strip. */
+  funds: FundSummary[];
   selectedTicker: Ticker;
   /** Reset the projection to the seed state (before the first poll). */
   reset: () => void;
@@ -62,15 +65,9 @@ export interface GameStoreState {
 // Helpers
 // ---------------------------------------------------------------------------
 
+/** The engine's listed universe, shown until the first poll lands. */
 function seedMarket(): Record<Ticker, Company> {
-  return {
-    NOVA: { ticker: 'NOVA', name: 'NOVA AI', sector: 'tech', price: 142.31, previousClose: 142.31, volatility: 0.035, beta: 1.3, rateSensitivity: 0.8, liquidity: 150_000_000 },
-    TITAN: { ticker: 'TITAN', name: 'TITAN MOTORS', sector: 'auto', price: 87.12, previousClose: 87.12, volatility: 0.02, beta: 1.0, rateSensitivity: 0.7, liquidity: 200_000_000 },
-    ORBL: { ticker: 'ORBL', name: 'ORBITAL DYNAMICS', sector: 'space', price: 203.44, previousClose: 203.44, volatility: 0.04, beta: 1.4, rateSensitivity: 0.6, liquidity: 80_000_000 },
-    HELX: { ticker: 'HELX', name: 'HELIX SYSTEMS', sector: 'biotech', price: 61.28, previousClose: 61.28, volatility: 0.06, beta: 1.6, rateSensitivity: 0.5, liquidity: 40_000_000 },
-    APXB: { ticker: 'APXB', name: 'APEX BANK', sector: 'finance', price: 34.9, previousClose: 34.9, volatility: 0.008, beta: 0.7, rateSensitivity: 1.6, liquidity: 1_200_000_000 },
-    PULSE: { ticker: 'PULSE', name: 'PULSE', sector: 'consumer', price: 118.27, previousClose: 118.27, volatility: 0.006, beta: 0.5, rateSensitivity: 0.4, liquidity: 800_000_000 },
-  };
+  return createInitialMarket().companies;
 }
 
 const SEED_FUND = createFund(STARTING_CAPITAL, 0);
@@ -114,6 +111,7 @@ function seedState(): SeedState {
     liquidationCause: null,
     priceHistory: {},
     navHistory: [],
+    funds: [],
   };
 }
 
@@ -169,6 +167,7 @@ export const useGameStore = create<GameStoreState>((set, get) => ({
         events: p.events,
         flow: p.flow,
         rivalDecisionKey: p.rivalDecisionKey,
+        funds: p.funds,
       });
     } catch {
       // silent — next poll retries

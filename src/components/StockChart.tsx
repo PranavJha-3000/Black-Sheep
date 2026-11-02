@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useGameStore } from '../store/gameStore';
 import { fmtNum, fmtPct, cx } from './fmt';
-const SECTORS: Record<string, string> = { NOVA: 'Technology', TITAN: 'Automotive', ORBL: 'Aerospace', HELX: 'Biotech', APXB: 'Banking', PULSE: 'Consumer' };
+const SECTORS: Record<string, string> = { NOVA: 'Technology', TITAN: 'Automotive', ORBL: 'Aerospace', HELX: 'Biotech', APXB: 'Banking', PULSE: 'Consumer', VOLT: 'Energy', FORGE: 'Industrials', CURA: 'Biotech', LEDG: 'Banking' };
 const TF = ['1D', '1W', '1M', '3M', '1Y', 'ALL'];
 export default function StockChart() {
   const sel = useGameStore((s) => s.selectedTicker);

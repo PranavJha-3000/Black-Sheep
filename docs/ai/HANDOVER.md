@@ -1,26 +1,32 @@
 # Handover
 
 ## Current state
-- Working: **Stage 2 global live world complete** (branch `feat/stage2-global-world`, unmerged). One persistent seeded world named `live` replaces rooms, lobby and per-room worlds (D-016). Humans observe via public `GET /world/state` with no account (D-017); the seed is persisted (D-018); every fund can be liquidated and then stops deciding (D-019). Pure rules live in `server/worldCore.ts` with unit tests. First init migration generated offline (`prisma/migrations/20261102000000_init`). 94/94 tests across 7 files. Stage 1 (repo cleanup) is merged to `main`.
-- In progress: nothing. Stage 3 (fund registry, ~3 AI funds) is next.
-- Broken: nothing known — typecheck, tests, lint and build green. Live-DB behaviour is UNVERIFIED (no Postgres).
-- Avoid: Do not duplicate engine logic — import `@black-sheep/engine/*`. Every async Express route goes through `wrap()`. Prisma pinned to v6. Never call an LLM from the browser (VISION §14.9) — `makeLLMDecision` has no default endpoint on purpose. Every field added to `buildWorldStatePayload` is public. Run ONE server process per DB.
+- Working: **Stage 3 fund registry complete** (branch `feat/stage3-fund-registry`). Three configured AI funds — STERLING & VALE (cautious), HALDEN WHITMORE (aggressive), CROWN MERIDIAN (quant) — each with mandate, model (`claude-opus-5-5`), risk limit and a staggered decision slot (D-020); in-character fallback policies and a risk-limit clamp on every decision (D-021); a 10-company market (D-022); FundsStrip shows every fund. Stages 1–2 are merged to `main`.
+- In progress: nothing. Stage 4 (decision cycle, tools, cost metering) is next.
+- Broken: nothing known — typecheck, tests, lint and build green. Live-DB and live-provider behaviour UNVERIFIED (no Postgres, no key used).
+- Avoid: Do not duplicate engine logic — import `@black-sheep/engine/*`. Every async Express route goes through `wrap()`. Prisma pinned to v6. Never call an LLM from the browser (VISION §14.9). Every field added to `buildWorldStatePayload` is public. Run ONE server process per DB. A fund's identity is its registry `name` — renaming an entry starts a new fund.
 
 ## Open items
 - [ ] Delete parked branch `wip/stage2-global-world` (user decision; nothing from it was merged).
-- [ ] Stage 2 review minors (deferred): `/world/state` + tick loop are N+1 (add `@@index([fundId, timestamp])` on RivalDecisionLog, batch queries); route reads `w.market` outside the lock; ticks can queue if one exceeds 5s; failed world load retries every tick/poll; `thinking` stays true for a just-liquidated fund; latest snapshot picked by timestamp not id and MarketTick is never pruned; restart loses ≤2 ticks; `verify-backend.ps1` should use `prisma migrate deploy`; `decideRival` mutates memory before persist succeeds (pre-existing).
+- [ ] **Cost:** with `ANTHROPIC_API_KEY` set the world makes ~3.6 Opus 5.5 calls/min with no budget cap — Stage 4 adds metering and per-fund budgets; until then run without a key or switch `config/funds.ts` models.
+- [ ] Legacy `APEX CAPITAL` fund (Stage 2) stays in an existing world as an observed, non-deciding fund (D-020) — decide whether to retire it in a schema/data pass.
+- [ ] Stage 2 review minors (deferred): `/world/state` + tick loop are N+1 (add `@@index([fundId, timestamp])` on RivalDecisionLog, batch queries); route reads `w.market` outside the lock; ticks can queue if one exceeds 5s; failed world load retries every tick/poll; latest snapshot picked by timestamp not id and MarketTick is never pruned; restart loses ≤2 ticks; `verify-backend.ps1` should use `prisma migrate deploy`; `decideRival` mutates memory before persist succeeds (pre-existing).
 - [ ] Confirm: should the public payload expose `world.seed`? With the client-side engine it lets observers predict upcoming price noise (kept for now; observers cannot act).
-- [ ] **Stage 3 — fund registry + observer API:** replace the player `Fund` and the `me` projection in `/state`/`stateMapper` with a registry of ~3 AI funds (VISION §6); replace the single contrarian rival (`APEX CAPITAL`, `RIVAL_SYSTEM_PROMPT` mentions "the rival player").
 - [ ] **Observer UI (VISION §13):** the terminal still focuses one fund (`funds[0]`) with player-shaped copy ("YOUR POSITIONS", RAVEN CAPITAL branding, "Select NOVA… and BUY"); build a multi-fund observer view.
 - [ ] Multi-process writer: Postgres advisory-lock leader election (D-016 revisit) before running more than one server process.
-- [ ] `detectConfrontation` (engine) now has no app caller — reuse it for relationship memory in Stage 3 or remove it.
+- [ ] `detectConfrontation` (engine) now has no app caller — reuse it for relationship memory in Stage 5 or remove it.
 - [ ] `LiquidationLog.rivalContext` is always null (D-019) and `server/auth.ts` / `User` are unused by the client — drop or repurpose in a schema pass.
-- [ ] Hardcoded model ID `claude-sonnet-4-6` in `packages/engine/src/rivalLLM.ts` — move to a model/config registry (VISION §10 reproducibility).
 - [ ] Dead helper `src/components/fmt.ts` `tickersOf` (zero callers); `server/world.ts` exports `getLiveWorld` with zero callers (kept as the planned accessor).
-- [ ] Engine barrel `packages/engine/src/index.ts` has zero importers but is the package's declared `"."` entry — decide in Stage 3.
+- [ ] Engine barrel `packages/engine/src/index.ts` has zero importers but is the package's declared `"."` entry (does not re-export `funds`/`policies`) — decide later.
 - [ ] Live-DB verification still blocked on WSL/Docker (`wsl --install -d Ubuntu`, reboot, then `scripts/verify-backend.ps1`). The init migration exists; run `npx prisma migrate deploy` (not `migrate dev --name init`, which would create a second migration) on first DB boot.
 
 ## Log
+
+### 2026-11-02 · Claude Opus 5.5 (Claude Code) · Stage 3 fund registry
+CHANGED: New `config/funds.ts` + `config/models.ts` registries; engine `funds.ts` (FundProfile) and `policies.ts` (`decideByPolicy`, `enforceRiskLimit`); `makeLLMDecision` takes a per-fund brain (prompt, model, effort, fallback), handles refusals and thinking blocks, and no longer hardcodes a model; four new companies (VOLT, FORGE, CURA, LEDG). Server: one `Agent` per registry fund with its own cadence slot and pending flag, missing registry funds upserted on load, old snapshots gain new listings, `/world/state` carries each fund's public `profile`. Client: FundsStrip, store `funds`, seed market from the engine.
+WHY: VISION §5–6, §12, §15 — distinct AI funds with their own mandate, model, limits and fallback. See D-020…D-022.
+VERIFY: after every task `npm run typecheck` 0, `npm test` green (128/128 after Task 4, 10 files), `npm run lint` 0; `npm run build` ✓; grep gate for `claude-sonnet-4-6|rivalPending|rivalFundId` clean.
+NOT VERIFIED: anything needing Postgres (fund upsert, cadence slots firing, snapshot merge on a real DB) or a live provider key (real Opus 5.5 responses).
 
 ### 2026-11-02 · Claude Opus 5.5 (Claude Code) · Stage 2 global live world
 CHANGED: `World` replaces `Room` (schema + offline init migration); `server/world.ts` runs one persistent `live` world; new pure `server/worldCore.ts` (seed, snapshot, cadence, public payload) and public `GET /world/state` (`server/worldRoutes.ts`); `server/rooms.ts` deleted; every fund can be liquidated and a liquidated fund stops deciding. Client: auth/lobby screens and player-vs-rival UI deleted; the store polls `/world/state` without a token and focuses the lowest-id fund; the payload type is shared type-only from the server.

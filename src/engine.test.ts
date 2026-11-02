@@ -5,8 +5,8 @@ import type { MarketEvent, MarketState } from '@black-sheep/engine/types';
 function runTicks(s: MarketState, seed: number, n: number): MarketState { let x = s; for (let i = 0; i < n; i++) x = tickMarket(x, seed); return x; }
 describe('market engine', () => {
   const market = createInitialMarket();
-  it('seeds 6 companies with realistic prices', () => {
-    expect(Object.keys(market.companies)).toEqual(['NOVA', 'TITAN', 'ORBL', 'HELX', 'APXB', 'PULSE']);
+  it('seeds 10 companies with realistic prices', () => {
+    expect(Object.keys(market.companies)).toEqual(['NOVA', 'TITAN', 'ORBL', 'HELX', 'APXB', 'PULSE', 'VOLT', 'FORGE', 'CURA', 'LEDG']);
     for (const t of Object.keys(market.companies)) { const c = market.companies[t]; expect(c.price).toBeGreaterThanOrEqual(20); expect(c.price).toBeLessThanOrEqual(400); expect(c.volatility).toBeGreaterThan(0); expect(c.previousClose).toBe(c.price); }
   });
   it('deterministic same seed', () => { const a = runTicks(market, 42, 100); const b = runTicks(market, 42, 100); expect(JSON.stringify(a)).toBe(JSON.stringify(b)); expect(a.tickCount).toBe(100); });
