@@ -7,10 +7,11 @@ Entry: `server/world.ts → startWorldLoop()` → `setInterval(5s)` → `ensureL
 2. `tickMarket(market, seed)` → `maybeFireScriptedEvent`/`generateEvent` → `applyEvent`
 3. `trackPeakNav(w)` — compute NAV for every fund at new prices; update `Fund.peakNav` if a new all-time high
 4. `liquidateFunds(w)` — for **every** non-liquidated fund with open positions: reconstruct the engine Fund, `checkLiquidation`. If `atRisk`: force-close all positions at market, `Fund.liquidated = true`, `deriveCauseOfDeath`, `LiquidationLog` (`rivalContext: null`) — one transaction. If the fund has an agent, `agent.liquidated = true` and a liquidation episode is remembered.
-5. Event fired? → `MarketEventLog` row
-6. `tickCount % 3 === 0`? → `MarketTick` row (`snapshotJson`)
-7. For each agent: `shouldFundDecide(tickCount, agent.pending, agent.liquidated, every, offset)` (its own slot, one call in flight per fund, never when liquidated) → fire `decideFund(w, agent)` non-blocking
-8. `decideFund`: `buildDecisionInput` + `memory: agent.memory` → `chooseDecision` (see "Fund decision cycle") OUTSIDE the lock → `enforceRiskLimit` → inside `withWorldLock`: drop the decision if the fund was liquidated meanwhile; else `applyTrade` → `applyRivalDecision` → persist in ONE transaction: Fund.cash + added/removed Positions + `RivalDecisionLog` row (`source`, `model`, `llmCallId`) → `rememberDecision` (see "Agent memory")
+5. World Director (D-029): `DIRECTOR_MODE != none` and `tickCount % 10 === 9` → `runDirector`: `observeWorld` (public conditions only) → `ruleDirector` or `proposeWithJev` (stub: none) → `validateIntervention` → `buildDirectorEvent` (separate RNG) → `applyEvent`; one `DirectorDecisionLog` row per cycle
+6. Each fired event (scheduled/random and Director) → `MarketEventLog` row; `director.lastEventTick` updated
+7. `tickCount % 3 === 0`? → `MarketTick` row (`snapshotJson`) + one `FundNavSnapshot` per fund (NAV, gross exposure from `trackPeakNav`'s marks)
+8. For each agent: `shouldFundDecide(tickCount, agent.pending, agent.liquidated, every, offset)` (its own slot, one call in flight per fund, never when liquidated) → fire `decideFund(w, agent)` non-blocking
+9. `decideFund`: `buildDecisionInput` + `memory: agent.memory` → `chooseDecision` (see "Fund decision cycle") OUTSIDE the lock → `enforceRiskLimit` → inside `withWorldLock`: drop the decision if the fund was liquidated meanwhile; else `applyTrade` → `applyRivalDecision` → persist in ONE transaction: Fund.cash + added/removed Positions + `RivalDecisionLog` row (`source`, `model`, `llmCallId`) → `rememberDecision` (see "Agent memory")
 
 Assumptions: single server process (the in-memory world is truth between snapshots); a rebuild can lose ≤2 ticks of drift.
 Side effects: Postgres writes; at most one Anthropic decision (≤ 4 rounds) per fund slot, only with a key, a material change and budget headroom.
@@ -66,3 +67,15 @@ Entry: `server/worldRoutes.ts` → `ensureLiveWorld()` → pure builders in `ser
 Assumptions: observers are humans; agents never call these routes.
 Side effects: reads only.
 Fragile: every field added to a builder is public; keep `observerCore.test.ts`'s field allow-list green.
+
+## Analytics (`GET /world/analytics`, D-028)
+Entry: `server/worldRoutes.ts` → `ensureLiveWorld()` → `buildAnalytics` in `server/analyticsCore.ts`
+
+1. Per fund: newest 2000 `FundNavSnapshot` NAVs (reversed to oldest first), positions (open ones → signed exposure at current price; all → opened notional), `RivalDecisionLog` grouped by source, `LlmCallLog` grouped by outcome with token/cost/latency sums, `ToolCallLog` count.
+2. World: last 500 `MarketEventLog` rows; `DirectorDecisionLog` grouped by kind and applied; the configured Director mode.
+3. `buildAnalytics` → financial metrics (`seriesMetrics`, `concentration`, turnover), AI-systems metrics (null when no data), event metrics, survival, notes.
+4. Client: `gameStore.poll()` fetches `/world/analytics` only while ANALYTICS is open.
+
+Assumptions: one world; per-fund queries run fund by fund (N funds × 5 queries).
+Side effects: reads only.
+Fragile: every field in `AnalyticsPayload` is public.

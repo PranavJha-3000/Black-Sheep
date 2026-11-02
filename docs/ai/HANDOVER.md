@@ -1,12 +1,13 @@
 # Handover
 
 ## Current state
-- Working: **Stage 6 observer UI complete** (branch `feat/stage6-observer-ui`). The terminal is an observer with WORLD, FUNDS, FUND DETAIL and ACTIVITY views; FUND DETAIL shows a fund's mandate, book, memory and each decision's model call and tool calls; ACTIVITY merges decisions, calls, tools, events and liquidations (D-027). Stages 1–5 are merged to `main`.
-- In progress: nothing. Stage 7 (metrics, analytics, World Director) is next.
+- Working: **Stage 7 metrics, analytics and World Director complete** (branch `feat/stage7-metrics-director`). Pure evaluation metrics, per-fund NAV snapshots, `GET /world/analytics` and an ANALYTICS view (D-028); a World Director in the tick loop with `none`/`rule`/`jev` modes (default `rule`, env `DIRECTOR_MODE`) that can only fire validated sector/macro catalog events; the Jev adapter is a disabled stub (D-029). The observer has WORLD, FUNDS, FUND DETAIL, ACTIVITY and ANALYTICS views (D-027). Stages 1–6 are merged to `main`.
+- In progress: nothing. PAUSED for the user before Stage 8 (initial scope, Stages 3–7, complete).
 - Broken: nothing known — typecheck, tests, lint and build green. Live-DB and live-provider behaviour UNVERIFIED (no Postgres, no key used).
 - Avoid: Do not duplicate engine logic — import `@black-sheep/engine/*`. Every async Express route goes through `wrap()`. Prisma pinned to v6. Never call an LLM from the browser (VISION §14.9). Every field added to `buildWorldStatePayload` is public. Run ONE server process per DB. A fund's identity is its registry `name` — renaming an entry starts a new fund.
 
 ## Open items
+- [ ] **Jev (Stage 7):** the adapter is a stub. Needs Jev's API URL, auth, response contract, pricing and usage reporting (VISION §8). When implemented: call it OUTSIDE the world lock, validate/apply inside, and meter its spend separately from the funds.
 - [ ] Delete parked branch `wip/stage2-global-world` (user decision; nothing from it was merged).
 - [ ] **Cost (Stage 4):** with a key, spend is capped at $2/fund/day and $10/day overall (`config/funds.ts`, `config/game.ts`). Never verified against a live key — first live run: watch `LlmCallLog` cost per call vs the ~$0.47 worst-case estimate.
 - [ ] `npm audit` reports high/critical advisories in express (body-parser, qs, proxy-addr) and prisma (deepmerge-ts) transitive deps — pre-existing, not from `@anthropic-ai/sdk`; upgrade in a deps pass.
@@ -25,6 +26,12 @@
 - [ ] Live-DB verification still blocked on WSL/Docker (`wsl --install -d Ubuntu`, reboot, then `scripts/verify-backend.ps1`). The init migration exists; run `npx prisma migrate deploy` (not `migrate dev --name init`, which would create a second migration) on first DB boot.
 
 ## Log
+
+### 2026-11-02 · Claude Opus 5.5 (Claude Code) · Stage 7 metrics, analytics, World Director
+CHANGED: New engine `metrics.ts`, `director.ts`; `server/providers/jev.ts` (stub), `server/analyticsCore.ts`; `world.ts` runs the Director every 10 ticks and writes `FundNavSnapshot`/`DirectorDecisionLog` (migration `20261102040000_metrics_director`); route `GET /world/analytics`; store `analytics` + `AnalyticsView`; ANALYTICS nav enabled.
+WHY: VISION §8, §11, §13 view 7. See D-028, D-029.
+VERIFY: `npm run typecheck` 0, `npm test` 213/213, `npm run lint` 0, `npm run build` ✓; boot smoke `/health` 200 with `DIRECTOR_MODE=jev`; Vite smoke — ANALYTICS renders.
+NOT VERIFIED: migration, Director cycles and analytics against a live DB (no Postgres); `/world/analytics` returns 500 without a DB, like every DB route.
 
 ### 2026-11-02 · Claude Opus 5.5 (Claude Code) · Stage 6 observer UI
 CHANGED: New `server/observerCore.ts` (decision traces, activity feed) and routes `GET /world/funds/:id/trace`, `GET /world/activity`; store `view`/`selectedFundId`/`trace`/`activity` and selected-fund focus; new `FundsView`, `FundDetailView`, `ActivityView`; Terminal nav + BLACK SHEEP branding; player-era copy removed.

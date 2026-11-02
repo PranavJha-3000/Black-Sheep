@@ -8,16 +8,19 @@
 | `packages/engine/src/memory.ts` | Pure memory rules: episodes, reflections, relationship notes, prompt selection, `recall_memory` filtering | config |
 | `packages/engine/src/fundTools.ts` | Pure fund research tools (`FUND_TOOLS`, `runFundTool`) and `submit_decision` parsing | engine |
 | `packages/engine/src/funds.ts`, `policies.ts` | Typed `FundProfile` view of the registry; per-personality deterministic fallback policies and `enforceRiskLimit` | config |
+| `packages/engine/src/metrics.ts`, `director.ts` | Pure evaluation metrics (series, concentration, events) and the World Director (public observation, rule policy, intervention validation, engine-built events) | config, engine types |
 | `server/db.ts` | PrismaClient singleton | @prisma/client |
 | `server/auth.ts` | Register/login (bcrypt, JWT), `requireAuth` middleware, `wrap()` async guard. Still mounted; the observer client no longer uses accounts | db |
 | `server/worldCore.ts` | PURE world rules, no I/O: DB-row → engine shapes, `resolveWorldSeed`, `parseWorldSnapshot`, `addMissingCompanies`, `missingRegistryFunds`, `shouldFundDecide` (per-fund cadence/offset), `buildWorldStatePayload` (the public payload and its `WorldStatePayload` type) | engine |
 | `server/world.ts` | The single live world (`ensureLiveWorld`, `getLiveWorld`, `withWorldLock`, `startWorldLoop`); 5s loop; snapshots + event logs; **one `Agent` per registered fund** (own cadence slot, pending flag, brain) + state-diff persistence; **liquidation of every fund** (`liquidateFunds`); **peak NAV tracking** (`trackPeakNav`) | db, engine, worldCore |
 | `server/budget.ts` | PURE pricing (`costOfUsage`, `estimateCallCostUsd`) and the in-process `BudgetLedger` (reserve/settle per fund + global daily limit + concurrency cap, UTC-day rollover) | config |
 | `server/providers/anthropic.ts` | The only provider adapter: `@anthropic-ai/sdk` beta messages call + the bounded tool loop `runDecisionLoop` (metered, never throws) | SDK, engine fundTools, budget |
+| `server/providers/jev.ts` | Director mode resolution and the Jev adapter — a DISABLED STUB (no network call) until Jev's API contract is supplied | engine director types |
+| `server/analyticsCore.ts` | PURE builder for the ANALYTICS payload (per-fund financial + AI-systems metrics, world, Director, limitations) | engine metrics |
 | `server/observerCore.ts` | PURE builders for the investigation payloads: per-fund decision traces (model call + tool calls + memory) and the activity feed | engine types, worldCore types |
-| `server/worldRoutes.ts` | `GET /world/state`, `GET /world/funds/:id/trace`, `GET /world/activity` — public, no auth, read-only | db, world, worldCore |
+| `server/worldRoutes.ts` | `GET /world/state`, `GET /world/funds/:id/trace`, `GET /world/activity`, `GET /world/analytics` — public, no auth, read-only | db, world, worldCore |
 | `server/index.ts` | Express app, routes (`/auth`, `/world`), error handler, world clock start | all server modules |
-| `prisma/schema.prisma` | Postgres schema: User, World, Fund, Position, MarketTick, MarketEventLog, RivalDecisionLog (+ source/model/llmCallId), LiquidationLog, LlmCallLog, ToolCallLog, AgentMemory. Init migration in `prisma/migrations/20261102000000_init` | @prisma/client |
+| `prisma/schema.prisma` | Postgres schema: User, World, Fund, Position, MarketTick, MarketEventLog, RivalDecisionLog (+ source/model/llmCallId), LiquidationLog, LlmCallLog, ToolCallLog, AgentMemory, FundNavSnapshot, DirectorDecisionLog. Init migration in `prisma/migrations/20261102000000_init` | @prisma/client |
 | `src/store/gameStore.ts` | Read-only zustand projection of public `GET /world/state` (polled every 2.5s); focuses the lowest-id fund and summarises every fund (`funds`) for `FundsStrip`; no auth, lobby, local simulation or trading | engine, server API |
 | `src/components/*` | Terminal UI (Hero, Mid, RivalPanel = FUND INTEL, FundSummaryPanel, PositionRow…). `App` renders only `<Terminal/>` | gameStore |
 | `scripts/verify-backend.ps1` | One-command backend acceptance test (db → migrate → server → unattended tick growth) | docker, prisma, server |
@@ -29,6 +32,7 @@
 - **Fund.peakNav**: all-time high NAV, updated by the tick loop (`trackPeakNav`) (the post-trade `updatePeakNav` hook was removed with human trading in Stage 1). Display stat (result cards removed in Stage 1).
 - **Fund.liquidated**: boolean set server-authoritatively when `checkLiquidation` flags a margin breach. The fund stays visible to observers (`LIQUIDATED — cause` in FundSummaryPanel) and stops deciding (D-019).
 - **World process:** one in-memory `World` — the persisted `World` row named `live` (market + scheduler + one `Agent` per registry fund). The loop mutates memory, persists snapshots/logs/decision deltas; a restart rebuilds from the latest snapshot (corrupt → throws) + Fund/Position rows + last RivalDecisionLog entry, keeping the persisted seed (D-018).
+- **World Director (D-029):** runs in the tick under the lock, sees only public conditions, can only fire validated catalog sector/macro events; every cycle is a `DirectorDecisionLog` row.
 - **Secrets:** `ANTHROPIC_API_KEY` and `JWT_SECRET` live in `.env`, read server-side only. Only the server calls the LLM provider (the Vite browser proxy was removed in Stage 1).
 
 ## Boundaries

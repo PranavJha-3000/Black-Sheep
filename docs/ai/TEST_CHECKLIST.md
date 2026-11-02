@@ -89,3 +89,12 @@ Run before any change counts as done.
 - [ ] Network tab: `/world/activity` is requested only while ACTIVITY is open; `/world/funds/:id/trace` only in FUND DETAIL
 - [ ] (Needs DB) `curl localhost:3001/world/funds/abc/trace` and `/world/funds/999999/trace` → 404
 - [ ] (Needs DB + key) FUND DETAIL → expanding an `llm` decision shows its tool calls with inputs and outputs
+
+### Stage 7 — metrics, analytics, World Director
+- [ ] `npm test` includes `packages/engine/src/{metrics,director}.test.ts`, `server/providers/jev.test.ts`, `server/analyticsCore.test.ts` and the ANALYTICS polling test in `gameStore.test.ts`
+- [ ] Vite dev → ANALYTICS is enabled; `/world/analytics` is requested only while it is open
+- [ ] Boot with `DIRECTOR_MODE=jev` (no JEV_* env) → server starts; no outbound request to a Jev host
+- [ ] (Needs DB) `npx prisma migrate deploy` applies `20261102040000_metrics_director`; `\dt` shows `FundNavSnapshot`, `DirectorDecisionLog`
+- [ ] (Needs DB) every 3 ticks one `FundNavSnapshot` row per fund; every 10 ticks (tickCount % 10 = 9) one `DirectorDecisionLog` row
+- [ ] (Needs DB) `DIRECTOR_MODE=none` → no `DirectorDecisionLog` rows and no `director-` events; `jev` → rows with `applied = false` and a "not implemented/not configured" rationale
+- [ ] (Needs DB) `curl localhost:3001/world/analytics` → JSON with no `NaN`/`Infinity`; a fund with no snapshots shows nulls
