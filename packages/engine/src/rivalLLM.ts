@@ -1,37 +1,15 @@
 /*
- * Black Sheep - rival fund LLM brain.
+ * Black Sheep - fund LLM brain (pure half).
  *
- * makeLLMDecision() is the async decision backend that plugs into the same
- * RivalDecisionInput / RivalDecision shell as makeRandomDecision(). It calls
- * the provider endpoint the SERVER supplies (the API key never leaves the
- * server), parses the JSON response defensively, and FALLS BACK
- * to the brain's deterministic policy on any failure so the world never stalls.
- *
- * The system prompt is the craft: persona, the crowded-trade thesis, event
- * awareness, and a hard instruction to emit ONLY strict JSON (with an in-prompt
- * example) so parsing is deterministic. Reasoning is capped to 1-2 sentences.
+ * Everything a model-backed fund needs that involves no I/O: the per-fund
+ * system prompt, the compact user message, the material-change cost guard and
+ * defensive parsing of a decision out of model text. The provider call itself
+ * lives server-side (server/providers/anthropic.ts) so this engine stays free
+ * of network and provider dependencies (VISION §14.10).
  */
 
-import { makeRandomDecision } from './rival';
 import type { RivalDecision, RivalDecisionInput } from './rival';
 import type { FundProfile } from './funds';
-import { DEFAULT_FUND_MODEL, MODEL_REGISTRY } from '../../../config/models';
-
-// ---------------------------------------------------------------------------
-// Endpoint
-// ---------------------------------------------------------------------------
-
-/**
- * Provider endpoint, supplied by the server. Provider calls are server-only
- * (VISION §14.9): the server holds the key in its own env and passes it here
- * as a header. There is deliberately no browser default path.
- */
-export interface LLMEndpointOptions {
-  /** Full URL to POST the Anthropic messages body to. */
-  url: string;
-  /** Extra headers merged over the default content-type (e.g. x-api-key). */
-  headers?: Record<string, string>;
-}
 
 // ---------------------------------------------------------------------------
 // Prompt
@@ -54,17 +32,6 @@ const MARKET_VIEW = `You observe a live market shared with other AI funds. For e
 
 You manage your own long/short book and available cash, which you can see in full. You NEVER see another fund's positions or cash. Decide ONE action: BUY, SHORT, CLOSE an existing position (use its ticker) or HOLD. Your reasoning MUST be 1-2 sentences.`;
 
-export const RIVAL_SYSTEM_PROMPT = `You are the portfolio manager of APEX CAPITAL, a contrarian hedge fund. You are terse, confident, and slightly arrogant. You move against the crowd because crowded trades tend to unwind.
-
-${MARKET_VIEW}
-
-Rules:
-- Fade crowded trades: heavy positive net flow leans you toward SHORT; heavy negative flow leans you toward BUY.
-- Use recent MarketEvents for event-driven opportunities (a beat + flow = momentum you might ride briefly; a miss + flow = potential fade).
-- Keep sizing reasonable relative to your available cash - do not bet the entire fund on one idea.
-
-${JSON_CONTRACT}`;
-
 /** The system prompt for a registered fund: its identity, mandate and limits. */
 export function buildFundSystemPrompt(profile: FundProfile): string {
   return `You are the portfolio manager of ${profile.name}, an AI hedge fund.
@@ -76,8 +43,11 @@ ${MARKET_VIEW}
 
 Rules:
 - Stay true to your mandate and strategy; do not drift into another fund's style.
-- Never size a new position above ${Math.round(profile.maxPositionFraction * 100)}% of your available cash.
+- Never size a new position above ${Math.round(profile.maxPositionFraction * 100)}% of your NAV; calculate_risk reports the exact limit.
 - HOLD is a legitimate decision when nothing fits your strategy.
+
+Tools: research only as much as the decision needs - inspect_company, inspect_portfolio, calculate_risk, recent_events - then finish by calling submit_decision exactly once.
+If tools are unavailable, reply instead with a single JSON object.
 
 ${JSON_CONTRACT}`;
 }
@@ -109,7 +79,7 @@ export function buildRivalUserMessage(input: RivalDecisionInput): string {
   }
   lines.push('');
   lines.push(`Aggregate flow lean: ${input.estimatedPlayerSectorExposure}.`);
-  lines.push('Decide now. Reply with ONLY the JSON object.');
+  lines.push('Decide now: finish with submit_decision (or ONLY the JSON object if tools are unavailable).');
   return lines.join('\n');
 }
 
@@ -149,31 +119,6 @@ export function shouldRivalReconsider(input: RivalDecisionInput, last: RivalDeci
 // Response parsing
 // ---------------------------------------------------------------------------
 
-/** Pull the raw text out of an Anthropic messages response, tolerating shapes. */
-function extractText(data: unknown): string {
-  if (typeof data === 'string') return data;
-  if (data && typeof data === 'object') {
-    const obj = data as Record<string, unknown>;
-    if (typeof obj.content === 'string') return obj.content;
-    if (Array.isArray(obj.content)) {
-      // Models that think emit thinking blocks before the text block.
-      for (const block of obj.content) {
-        if (block && typeof block === 'object' && typeof (block as Record<string, unknown>).text === 'string') {
-          return (block as Record<string, unknown>).text as string;
-        }
-      }
-    }
-    if (Array.isArray(obj.choices)) {
-      const msg = obj.choices[0] as Record<string, unknown> | undefined;
-      if (msg && typeof msg.message === 'object') {
-        const content = (msg.message as Record<string, unknown>).content;
-        if (typeof content === 'string') return content;
-      }
-    }
-  }
-  return '';
-}
-
 /** Strip ```json ... ``` fences if the model wrapped its answer anyway. */
 function stripFences(text: string): string {
   const trimmed = text.trim();
@@ -190,6 +135,34 @@ function firstJsonObject(text: string): string | null {
   return text.slice(start, end + 1);
 }
 
+/**
+ * Parse a decision out of model text (fenced, prose-wrapped or bare JSON).
+ * Returns null when there is no well-formed decision - callers fall back.
+ */
+export function parseDecisionText(text: string): RivalDecision | null {
+  const jsonStr = firstJsonObject(stripFences(text));
+  if (!jsonStr) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(jsonStr);
+  } catch {
+    return null;
+  }
+  return normaliseDecision(parsed);
+}
+
+/** Validate an untrusted value as a decision and normalise its fields. */
+export function normaliseDecision(value: unknown): RivalDecision | null {
+  if (!isRivalDecision(value)) return null;
+  return {
+    action: value.action,
+    ticker: typeof value.ticker === 'string' ? value.ticker : undefined,
+    dollarAmount: typeof value.dollarAmount === 'number' ? Math.floor(value.dollarAmount) : undefined,
+    reasoning: value.reasoning,
+    confidence: Math.min(1, Math.max(0, value.confidence)),
+  };
+}
+
 function isRivalDecision(value: unknown): value is RivalDecision {
   if (!value || typeof value !== 'object') return false;
   const v = value as Record<string, unknown>;
@@ -198,88 +171,4 @@ function isRivalDecision(value: unknown): value is RivalDecision {
   if (typeof v.reasoning !== 'string') return false;
   if (typeof v.confidence !== 'number') return false;
   return true;
-}
-
-// ---------------------------------------------------------------------------
-// Public API
-// ---------------------------------------------------------------------------
-
-/** Who is deciding: the fund's prompt, model, effort and no-model fallback. */
-export interface FundBrain {
-  system: string;
-  model: string;
-  effort: 'low' | 'medium' | 'high';
-  fallback: (input: RivalDecisionInput) => RivalDecision;
-}
-
-const DEFAULT_BRAIN: FundBrain = {
-  system: RIVAL_SYSTEM_PROMPT,
-  model: DEFAULT_FUND_MODEL,
-  effort: MODEL_REGISTRY[DEFAULT_FUND_MODEL].effort,
-  fallback: makeRandomDecision,
-};
-
-/**
- * Output budget per decision. Current models think before answering, so the
- * budget covers thinking at the brain's effort plus a ~100-token JSON answer.
- */
-const MAX_TOKENS = 2048;
-
-/**
- * Ask the LLM for a fund decision. Never throws - any failure (network, HTTP,
- * refusal, malformed JSON) falls back to the brain's deterministic policy so
- * the world keeps running. Returns the parsed RivalDecision.
- */
-export async function makeLLMDecision(
-  input: RivalDecisionInput,
-  endpoint: LLMEndpointOptions,
-  brain: FundBrain = DEFAULT_BRAIN,
-): Promise<RivalDecision> {
-  const body = {
-    model: brain.model,
-    max_tokens: MAX_TOKENS,
-    system: brain.system,
-    output_config: { effort: brain.effort },
-    messages: [{ role: 'user', content: buildRivalUserMessage(input) }],
-  };
-
-  try {
-    const res = await fetch(endpoint.url, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', ...(endpoint.headers ?? {}) },
-      body: JSON.stringify(body),
-    });
-    if (!res.ok) {
-      throw new Error(`LLM proxy HTTP ${res.status}`);
-    }
-    const data: unknown = await res.json();
-    if (data && typeof data === 'object' && (data as Record<string, unknown>).stop_reason === 'refusal') {
-      throw new Error('LLM refused');
-    }
-    const raw = extractText(data);
-    if (!raw) throw new Error('LLM response had no text');
-    const cleaned = stripFences(raw);
-    const jsonStr = firstJsonObject(cleaned);
-    if (!jsonStr) throw new Error('No JSON object in LLM response');
-    const parsed: unknown = JSON.parse(jsonStr);
-    if (!isRivalDecision(parsed)) throw new Error('LLM JSON did not match RivalDecision shape');
-    return {
-      action: parsed.action,
-      ticker: typeof parsed.ticker === 'string' ? parsed.ticker : undefined,
-      dollarAmount: typeof parsed.dollarAmount === 'number' ? Math.floor(parsed.dollarAmount) : undefined,
-      reasoning: parsed.reasoning,
-      confidence: Math.min(1, Math.max(0, parsed.confidence)),
-    };
-  } catch (err) {
-    // Graceful degradation: the placeholder brain is correct-by-construction,
-    // so a failed LLM call still produces a sane, executable decision.
-    // In the browser `process` does not exist; guard so logging never throws.
-    const nodeProcess = (
-      globalThis as unknown as { process?: { env?: Record<string, string> } }
-    ).process;
-    if (nodeProcess?.env?.NODE_ENV !== 'test') {
-      console.warn('[rivalLLM] LLM call failed, falling back to rule-based policy:', err);
-    }
-    return brain.fallback(input);
-  }
 }

@@ -171,6 +171,12 @@ describe('decideByPolicy', () => {
     expect(enforceRiskLimit(close, i, QUANT)).toBe(close);
   });
 
+  it('enforceRiskLimit turns a missing or non-positive size into a hold', () => {
+    const i = input(fresh('quant'), flatMarket());
+    expect(enforceRiskLimit({ action: 'buy', ticker: 'NOVA', reasoning: 'x', confidence: 0.5 }, i, QUANT).action).toBe('hold');
+    expect(enforceRiskLimit({ action: 'short', ticker: 'NOVA', dollarAmount: -5, reasoning: 'x', confidence: 0.5 }, i, QUANT).action).toBe('hold');
+  });
+
   it('repeated shorts cannot lever the fund past its gross-exposure ceiling', () => {
     // Shorting credits proceeds to cash; sizing must not compound on that.
     const m = flatMarket();

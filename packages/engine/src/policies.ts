@@ -73,7 +73,7 @@ function hold(reasoning: string): RivalDecision {
  * so cash-based sizing would compound with every short. The gross-exposure
  * ceiling bounds the whole book, not just one trade.
  */
-function sizeFor(input: RivalDecisionInput, profile: FundProfile): number {
+export function maxNewPositionDollars(input: RivalDecisionInput, profile: FundProfile): number {
   let nav = input.ownFund.cash;
   let gross = 0;
   for (const pos of input.ownFund.positions) {
@@ -94,9 +94,13 @@ function sizeFor(input: RivalDecisionInput, profile: FundProfile): number {
  */
 export function enforceRiskLimit(decision: RivalDecision, input: RivalDecisionInput, profile: FundProfile): RivalDecision {
   if (decision.action !== 'buy' && decision.action !== 'short') return decision;
-  const cap = sizeFor(input, profile);
+  // A proposal with no usable size is not silently promoted to a max-size trade.
+  if (!(typeof decision.dollarAmount === 'number' && decision.dollarAmount > 0)) {
+    return hold(`${decision.ticker ?? 'Proposal'} had no valid size; standing aside.`);
+  }
+  const cap = maxNewPositionDollars(input, profile);
   if (cap === 0) return hold(`${decision.ticker ?? 'Signal'} noted, but no capital is free for a new position.`);
-  return { ...decision, dollarAmount: Math.min(decision.dollarAmount ?? cap, cap) };
+  return { ...decision, dollarAmount: Math.min(decision.dollarAmount, cap) };
 }
 
 function priceOf(input: RivalDecisionInput, ticker: Ticker): number | undefined {
@@ -147,7 +151,7 @@ function cautious(input: RivalDecisionInput, profile: FundProfile): RivalDecisio
   return {
     action: 'buy',
     ticker: best.ticker,
-    dollarAmount: sizeFor(input, profile),
+    dollarAmount: maxNewPositionDollars(input, profile),
     reasoning: `${best.ticker} is off ${(best.changePct * 100).toFixed(1)}% with low volatility; adding a measured position.`,
     confidence: 0.6,
   };
@@ -164,7 +168,7 @@ function aggressive(input: RivalDecisionInput, profile: FundProfile): RivalDecis
     return {
       action: 'short',
       ticker: badNews.ticker,
-      dollarAmount: sizeFor(input, profile),
+      dollarAmount: maxNewPositionDollars(input, profile),
       reasoning: `${badNews.ticker} just printed bad news (${badNews.priceImpactPercent}%); pressing the short.`,
       confidence: 0.75,
     };
@@ -177,7 +181,7 @@ function aggressive(input: RivalDecisionInput, profile: FundProfile): RivalDecis
     return {
       action: 'short',
       ticker: extended.ticker,
-      dollarAmount: sizeFor(input, profile),
+      dollarAmount: maxNewPositionDollars(input, profile),
       reasoning: `${extended.ticker} is up ${(extended.changePct * 100).toFixed(1)}% with nothing behind it; fading the move.`,
       confidence: 0.65,
     };
@@ -206,7 +210,7 @@ function quant(input: RivalDecisionInput, profile: FundProfile): RivalDecision {
   return {
     action: best.flow > 0 ? 'buy' : 'short',
     ticker: best.ticker,
-    dollarAmount: sizeFor(input, profile),
+    dollarAmount: maxNewPositionDollars(input, profile),
     reasoning: `Strongest flow signal is ${best.ticker} ($${(best.flow / 1e6).toFixed(2)}M); following it.`,
     confidence: Math.min(0.9, 0.55 + best.strength * 5),
   };

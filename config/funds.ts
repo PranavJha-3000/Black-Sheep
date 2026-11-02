@@ -24,6 +24,7 @@ export const FUND_REGISTRY = [
     model: 'claude-opus-5-5',
     maxPositionFraction: 0.12,
     decisionEveryTicks: 10,
+    dailyBudgetUsd: 2,
     decisionOffset: 0,
   },
   {
@@ -36,6 +37,7 @@ export const FUND_REGISTRY = [
     model: 'claude-opus-5-5',
     maxPositionFraction: 0.2,
     decisionEveryTicks: 10,
+    dailyBudgetUsd: 2,
     decisionOffset: 3,
   },
   {
@@ -48,6 +50,7 @@ export const FUND_REGISTRY = [
     model: 'claude-opus-5-5',
     maxPositionFraction: 0.15,
     decisionEveryTicks: 10,
+    dailyBudgetUsd: 2,
     decisionOffset: 6,
   },
 ] as const;

@@ -26,6 +26,8 @@ export interface FundProfile {
   decisionEveryTicks: number;
   /** ...on ticks where tickCount % N === offset, so funds are staggered. */
   decisionOffset: number;
+  /** Provider spend this fund may use per UTC day, in USD (VISION §12). */
+  dailyBudgetUsd: number;
 }
 
 export const FUND_PROFILES: readonly FundProfile[] = FUND_REGISTRY;

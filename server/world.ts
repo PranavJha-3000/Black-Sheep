@@ -17,14 +17,18 @@ import {
   applyRivalDecision,
   buildDecisionInput,
   type RivalDecision,
+  type RivalDecisionInput,
   type RivalFund,
   type RivalPersonality,
 } from '@black-sheep/engine/rival';
-import { buildFundSystemPrompt, makeLLMDecision, type FundBrain } from '@black-sheep/engine/rivalLLM';
+import { buildFundSystemPrompt, buildRivalUserMessage, shouldRivalReconsider } from '@black-sheep/engine/rivalLLM';
+import { runFundTool } from '@black-sheep/engine/fundTools';
 import { getFundProfileByName, type FundProfile } from '@black-sheep/engine/funds';
 import { decideByPolicy, enforceRiskLimit } from '@black-sheep/engine/policies';
 import type { MarketEvent, MarketState, Ticker } from '@black-sheep/engine/types';
 import { prisma } from './db';
+import { BudgetLedger, estimateCallCostUsd } from './budget';
+import { anthropicCreate, runDecisionLoop, type CreateMessage, type LoopResult } from './providers/anthropic';
 import {
   addMissingCompanies,
   enginePositionFromRow,
@@ -38,7 +42,12 @@ import {
   singleFlight,
 } from './worldCore';
 import {
+  DECISION_MAX_TOKENS,
+  DECISION_PROMPT_TOKENS_ESTIMATE,
   EVENT_BUFFER,
+  GLOBAL_DAILY_BUDGET_USD,
+  MAX_CONCURRENT_LLM_CALLS,
+  MAX_TOOL_ROUNDS,
   LIVE_WORLD_NAME,
   SNAPSHOT_EVERY_TICKS,
   STARTING_CAPITAL,
@@ -64,8 +73,16 @@ import { MODEL_REGISTRY } from '../config/models';
 // Starting capital, tick interval, snapshot cadence, the event buffer and the
 // default seed come from config/game.ts — no engine-logic tuning constants live here.
 
-const ANTHROPIC_URL = 'https://api.anthropic.com/v1/messages';
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY ?? '';
+/** The provider call, or null when no key is configured (funds run on policy). */
+const createMessage: CreateMessage | null = ANTHROPIC_API_KEY ? anthropicCreate(ANTHROPIC_API_KEY) : null;
+/** Every provider call reserves budget here first (VISION §12, D-025). */
+const ledger = new BudgetLedger(GLOBAL_DAILY_BUDGET_USD, MAX_CONCURRENT_LLM_CALLS);
+
+/** Today's spend vs budget for a registered fund, for the observer payload. */
+export function fundSpend(fundId: number, profile: FundProfile): { todayUsd: number; dailyBudgetUsd: number } {
+  return { todayUsd: ledger.spentToday(fundId, new Date()), dailyBudgetUsd: profile.dailyBudgetUsd };
+}
 
 /** One registered fund's live decision state. */
 export interface Agent {
@@ -76,6 +93,8 @@ export interface Agent {
   pending: boolean;
   /** A liquidated fund stays visible but never decides again (D-019). */
   liquidated: boolean;
+  /** What the fund's model last saw; the material-change guard compares against it. */
+  lastLlmInput: RivalDecisionInput | null;
 }
 
 interface World {
@@ -232,8 +251,20 @@ async function loadLiveWorld(): Promise<World> {
       fund: await rebuildFund(f.id, market, profile.personality),
       pending: false,
       liquidated: f.liquidated,
+      lastLlmInput: null,
     });
   }
+
+  // Seed the budget ledger with what each fund already spent today, so a
+  // restart cannot reset a fund's budget.
+  const startOfDay = new Date();
+  startOfDay.setUTCHours(0, 0, 0, 0);
+  const spent = await prisma.llmCallLog.groupBy({
+    by: ['fundId'],
+    where: { worldId, timestamp: { gte: startOfDay } },
+    _sum: { costUsd: true },
+  });
+  ledger.seed(Object.fromEntries(spent.map((r) => [r.fundId, r._sum.costUsd ?? 0])), new Date());
 
   live = { worldId, name: row.name, seed: row.seed, market, scheduler, events, agents };
   return live;
@@ -399,6 +430,7 @@ async function persistFundState(
   before: RivalFund,
   after: RivalFund,
   decision: RivalDecision,
+  origin: DecisionOrigin,
 ): Promise<void> {
   const beforeKeys = new Set(before.positions.map((p) => positionKey(p.ticker, p.direction, p.entryTimestamp)));
   const afterKeys = new Set(after.positions.map((p) => positionKey(p.ticker, p.direction, p.entryTimestamp)));
@@ -447,39 +479,120 @@ async function persistFundState(
         fillPrice: after.lastDecision?.fillPrice ?? null,
         realizedPnL: after.lastDecision?.realizedPnL ?? null,
         tickCountAt: w.market.tickCount,
+        source: origin.source,
+        model: origin.model,
+        llmCallId: origin.llmCallId,
       },
     }),
   ]);
 }
 
-/** The fund's brain: its own prompt and model, with its rule-based policy as fallback. */
-function brainFor(profile: FundProfile): FundBrain {
-  return {
-    system: buildFundSystemPrompt(profile),
-    model: profile.model,
-    effort: MODEL_REGISTRY[profile.model].effort,
-    fallback: (input) => decideByPolicy(profile, input),
-  };
+/** Where a decision came from, recorded on its RivalDecisionLog row (D-025). */
+interface DecisionOrigin {
+  source: 'llm' | 'policy' | 'budget' | 'busy';
+  model: string | null;
+  llmCallId: number | null;
+}
+
+/** Persist one provider call and its tool invocations. Never throws (logging must not kill a decision). */
+async function logLlmCall(w: World, agent: Agent, loop: LoopResult): Promise<number | null> {
+  try {
+    const row = await prisma.llmCallLog.create({
+      data: {
+        worldId: w.worldId,
+        fundId: agent.fundId,
+        provider: 'anthropic',
+        model: agent.profile.model,
+        servedBy: loop.servedBy,
+        purpose: 'decision',
+        outcome: loop.outcome,
+        rounds: loop.rounds,
+        inputTokens: loop.usage.input_tokens,
+        outputTokens: loop.usage.output_tokens,
+        cacheReadTokens: loop.usage.cache_read_input_tokens,
+        cacheWriteTokens: loop.usage.cache_creation_input_tokens,
+        costUsd: loop.costUsd,
+        latencyMs: loop.latencyMs,
+        error: loop.error ?? null,
+        toolCalls: {
+          create: loop.toolCalls.map((t) => ({
+            name: t.name,
+            inputJson: JSON.stringify(t.input ?? null),
+            outputJson: JSON.stringify(t.output ?? null),
+            ok: t.ok,
+            latencyMs: t.latencyMs,
+          })),
+        },
+      },
+    });
+    return row.id;
+  } catch (err) {
+    console.error(`[world] ${agent.profile.name} call log failed`, err);
+    return null;
+  }
+}
+
+/**
+ * Choose who decides this cycle (VISION §12): the fund's deterministic policy
+ * when there is no key or nothing material changed since the model last
+ * looked; the model when its budget reservation succeeds; the policy again,
+ * marked 'budget' when the fund's or the global budget refuses, or 'busy'
+ * when the concurrency cap is full. The model runs OUTSIDE the world lock.
+ */
+async function chooseDecision(
+  w: World,
+  agent: Agent,
+  input: RivalDecisionInput,
+): Promise<{ proposed: RivalDecision; origin: DecisionOrigin }> {
+  const policy = (source: DecisionOrigin['source'], llmCallId: number | null = null) => ({
+    proposed: decideByPolicy(agent.profile, input),
+    origin: { source, model: null, llmCallId },
+  });
+
+  // Price moves alone don't wake the model; the policy still handles stops and targets.
+  if (!createMessage || !shouldRivalReconsider(input, agent.lastLlmInput)) return policy('policy');
+
+  const { model } = agent.profile;
+  const estimate = estimateCallCostUsd(model, MAX_TOOL_ROUNDS, DECISION_MAX_TOKENS, DECISION_PROMPT_TOKENS_ESTIMATE);
+  const reservation = ledger.reserve(agent.fundId, agent.profile.dailyBudgetUsd, estimate, new Date());
+  if (!reservation) return policy(ledger.atCapacity() ? 'busy' : 'budget');
+
+  let loop: LoopResult;
+  try {
+    loop = await runDecisionLoop(createMessage, {
+      model,
+      effort: MODEL_REGISTRY[model].effort,
+      system: buildFundSystemPrompt(agent.profile),
+      user: buildRivalUserMessage(input),
+      maxRounds: MAX_TOOL_ROUNDS,
+      maxTokens: DECISION_MAX_TOKENS,
+      runTool: (name, args) => runFundTool(name, args, input, agent.profile),
+    });
+  } catch (err) {
+    // A leaked reservation would hold a concurrency slot for the life of the process.
+    ledger.release(reservation);
+    throw err;
+  }
+  ledger.settle(reservation, loop.costUsd, new Date());
+  agent.lastLlmInput = input;
+  const llmCallId = await logLlmCall(w, agent, loop);
+
+  if (!loop.decision) {
+    console.warn(`[world] ${agent.profile.name} model gave no decision (${loop.outcome}); using policy`);
+    return policy('policy', llmCallId);
+  }
+  return { proposed: loop.decision, origin: { source: 'llm', model: loop.servedBy, llmCallId } };
 }
 
 /** One fund's decision pipeline: decide (outside the lock), then apply + persist (inside). */
 async function decideFund(w: World, agent: Agent): Promise<void> {
   const before = agent.fund;
   const input = buildDecisionInput(before, w.market, w.events, w.market.recentFlow);
-  // LLM when a key exists; the fund's deterministic policy otherwise.
-  // makeLLMDecision also self-falls-back to that policy on any failure.
-  //
-  // The LLM call is deliberately OUTSIDE the world lock (multi-second latency
-  // must not stall the market). The mutation and persistence below re-acquire
-  // the lock and re-read the current market so a decision that resolved
-  // against stale prices is never applied on top of fresher ones.
-  const proposed: RivalDecision = ANTHROPIC_API_KEY
-    ? await makeLLMDecision(
-        input,
-        { url: ANTHROPIC_URL, headers: { 'x-api-key': ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' } },
-        brainFor(agent.profile),
-      )
-    : decideByPolicy(agent.profile, input);
+  // The decision (and any model call) happens OUTSIDE the world lock. The
+  // mutation and persistence below re-acquire the lock and re-read the
+  // current market so a decision that resolved against stale prices is never
+  // applied on top of fresher ones.
+  const { proposed, origin } = await chooseDecision(w, agent, input);
   // The model proposes; the fund's risk limit disposes.
   const decision = enforceRiskLimit(proposed, input, agent.profile);
 
@@ -501,7 +614,7 @@ async function decideFund(w: World, agent: Agent): Promise<void> {
     const after = applyRivalDecision(before, decision, market);
     w.market = market;
     agent.fund = after;
-    await persistFundState(w, agent.fundId, before, after, decision);
+    await persistFundState(w, agent.fundId, before, after, decision, origin);
   });
 }
 

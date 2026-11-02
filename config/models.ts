@@ -15,6 +15,10 @@ export const MODEL_REGISTRY = {
     displayName: 'Claude Opus 5.5',
     inputUsdPerMTok: 4,
     outputUsdPerMTok: 20,
+    /** Cache reads bill at this fraction of the input price (Opus 5.5: 0.05x). */
+    cacheReadMultiplier: 0.05,
+    /** 5-minute cache writes bill at this multiple of the input price. */
+    cacheWriteMultiplier: 1.25,
     /** Opus 5.5 always thinks; effort bounds how much (output_config.effort). */
     effort: 'low',
   },
@@ -23,6 +27,8 @@ export const MODEL_REGISTRY = {
     displayName: 'Claude Sonnet 5.5',
     inputUsdPerMTok: 2,
     outputUsdPerMTok: 10,
+    cacheReadMultiplier: 0.1,
+    cacheWriteMultiplier: 1.25,
     effort: 'low',
   },
   'claude-haiku-5-5': {
@@ -30,6 +36,8 @@ export const MODEL_REGISTRY = {
     displayName: 'Claude Haiku 5.5',
     inputUsdPerMTok: 0.1,
     outputUsdPerMTok: 0.5,
+    cacheReadMultiplier: 0.1,
+    cacheWriteMultiplier: 1.25,
     effort: 'low',
   },
 } as const;

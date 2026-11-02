@@ -5,14 +5,17 @@
 |---|---|---|
 | `packages/engine` (`@black-sheep/engine`) | THE shared pure engine: market evolution/impact/flow, portfolio lifecycle, events, rival shell + LLM brain. UI-free, imported by client AND server | nothing |
 | `config/funds.ts`, `config/models.ts` | Literal-only registries: the AI funds (identity, mandate, strategy, model, risk limit, cadence slot) and the models they may use (pricing, effort). Dependency-free so the engine can import them | nothing |
+| `packages/engine/src/fundTools.ts` | Pure fund research tools (`FUND_TOOLS`, `runFundTool`) and `submit_decision` parsing | engine |
 | `packages/engine/src/funds.ts`, `policies.ts` | Typed `FundProfile` view of the registry; per-personality deterministic fallback policies and `enforceRiskLimit` | config |
 | `server/db.ts` | PrismaClient singleton | @prisma/client |
 | `server/auth.ts` | Register/login (bcrypt, JWT), `requireAuth` middleware, `wrap()` async guard. Still mounted; the observer client no longer uses accounts | db |
 | `server/worldCore.ts` | PURE world rules, no I/O: DB-row → engine shapes, `resolveWorldSeed`, `parseWorldSnapshot`, `addMissingCompanies`, `missingRegistryFunds`, `shouldFundDecide` (per-fund cadence/offset), `buildWorldStatePayload` (the public payload and its `WorldStatePayload` type) | engine |
 | `server/world.ts` | The single live world (`ensureLiveWorld`, `getLiveWorld`, `withWorldLock`, `startWorldLoop`); 5s loop; snapshots + event logs; **one `Agent` per registered fund** (own cadence slot, pending flag, brain) + state-diff persistence; **liquidation of every fund** (`liquidateFunds`); **peak NAV tracking** (`trackPeakNav`) | db, engine, worldCore |
+| `server/budget.ts` | PURE pricing (`costOfUsage`, `estimateCallCostUsd`) and the in-process `BudgetLedger` (reserve/settle per fund + global daily limit + concurrency cap, UTC-day rollover) | config |
+| `server/providers/anthropic.ts` | The only provider adapter: `@anthropic-ai/sdk` beta messages call + the bounded tool loop `runDecisionLoop` (metered, never throws) | SDK, engine fundTools, budget |
 | `server/worldRoutes.ts` | `GET /world/state` — public, no auth; builds the payload via `buildWorldStatePayload` | db, world, worldCore |
 | `server/index.ts` | Express app, routes (`/auth`, `/world`), error handler, world clock start | all server modules |
-| `prisma/schema.prisma` | Postgres schema: User, World, Fund, Position, MarketTick, MarketEventLog, RivalDecisionLog, LiquidationLog. Init migration in `prisma/migrations/20261102000000_init` | @prisma/client |
+| `prisma/schema.prisma` | Postgres schema: User, World, Fund, Position, MarketTick, MarketEventLog, RivalDecisionLog (+ source/model/llmCallId), LiquidationLog, LlmCallLog, ToolCallLog. Init migration in `prisma/migrations/20261102000000_init` | @prisma/client |
 | `src/store/gameStore.ts` | Read-only zustand projection of public `GET /world/state` (polled every 2.5s); focuses the lowest-id fund and summarises every fund (`funds`) for `FundsStrip`; no auth, lobby, local simulation or trading | engine, server API |
 | `src/components/*` | Terminal UI (Hero, Mid, RivalPanel = FUND INTEL, FundSummaryPanel, PositionRow…). `App` renders only `<Terminal/>` | gameStore |
 | `scripts/verify-backend.ps1` | One-command backend acceptance test (db → migrate → server → unattended tick growth) | docker, prisma, server |
@@ -29,7 +32,7 @@
 ## Boundaries
 - **Observation is public (D-017):** `GET /world/state` shows every fund's full book to anyone. **Agent isolation** lives in `buildDecisionInput`: an agent's `RivalDecisionInput` remains free of other funds' positions by construction. Agents never call the HTTP API.
 - **Single writer:** one server process; every world mutation goes through `withWorldLock` (D-016).
-- **Engine purity:** `packages/engine` has zero imports of express/prisma/react/zustand. If it needs I/O, the caller wires it (see `LLMEndpointOptions`).
+- **Engine purity:** `packages/engine` has zero imports of express/prisma/react/zustand. If it needs I/O, the caller wires it (the provider call lives in `server/providers/`).
 - **No engine duplication:** client and server never re-implement market/portfolio/rival math.
 - **UI:** components read the client store via selectors only.
 
