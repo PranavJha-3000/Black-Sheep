@@ -54,5 +54,9 @@
     "typescript": "^5.5.4",
     "vite": "^5.4.3",
     "vitest": "^2.0.5"
+  },
+  "overrides": {
+    "qs": "6.16.2",
+    "deepmerge-ts": "^8.0.2"
   }
 }

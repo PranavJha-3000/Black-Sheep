@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { createInitialMarket } from '@black-sheep/engine/market';
 import { initialScheduler } from '@black-sheep/engine/events';
 import {
+  activeFundsWhere,
   addMissingCompanies,
   buildWorldStatePayload,
   missingRegistryFunds,
@@ -136,6 +137,13 @@ describe('worldCore', () => {
       const missing = missingRegistryFunds(['APEX CAPITAL', 'STERLING & VALE']);
       expect(missing.map((p) => p.key)).toEqual(['halden-whitmore', 'crown-meridian']);
       expect(missingRegistryFunds(['STERLING & VALE', 'HALDEN WHITMORE', 'CROWN MERIDIAN'])).toEqual([]);
+    });
+  });
+
+  describe('activeFundsWhere (D-030: funds outside the registry are retired)', () => {
+    it('selects only registry funds of the world, so APEX CAPITAL is no longer marked, liquidated or shown', () => {
+      expect(activeFundsWhere(7)).toEqual({ worldId: 7, name: { in: ['STERLING & VALE', 'HALDEN WHITMORE', 'CROWN MERIDIAN'] } });
+      expect(activeFundsWhere(7).name.in).not.toContain('APEX CAPITAL');
     });
   });
 
