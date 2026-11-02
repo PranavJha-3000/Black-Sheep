@@ -2,16 +2,14 @@ import { Router, type Request } from 'express';
 import {
   availableCash,
   getExposure,
-  INITIAL_MARGIN_RATE,
   markToMarket,
 } from '@black-sheep/engine/portfolio';
 import { getNetFlow } from '@black-sheep/engine/market';
 import { RIVAL_NAME } from '@black-sheep/engine/rival';
-import type { Fund } from '@black-sheep/engine/portfolio';
-import type { Direction, Ticker } from '@black-sheep/engine/types';
 import { prisma } from './db';
 import { requireAuth, wrap, type AuthedRequest } from './auth';
 import { ensureWorld } from './world';
+import { engineFundFromRows } from './worldCore';
 import { STARTING_CAPITAL } from '../config/game';
 
 /**
@@ -43,40 +41,6 @@ function authed(req: Request): AuthedRequest {
 function playerName(email: string): string {
   const local = email.split('@')[0] ?? 'trader';
   return `${local.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 12) || 'TRADER'} CAPITAL`;
-}
-
-function directionOf(value: string): Direction {
-  return value === 'short' ? 'short' : 'long';
-}
-
-/** Rebuild any persisted fund into the engine's Fund shape (for NAV math). */
-function engineFundFromRows(
-  cash: number,
-  startingCapital: number,
-  rows: Array<{
-    id: number;
-    ticker: string;
-    direction: string;
-    quantity: number;
-    entryPrice: number;
-    entryTimestamp: Date;
-  }>,
-): Fund {
-  return {
-    cash,
-    positions: rows.map((p) => ({
-      id: `db-${p.id}`,
-      ticker: p.ticker as Ticker,
-      direction: directionOf(p.direction),
-      quantity: p.quantity,
-      entryPrice: p.entryPrice,
-      entryTimestamp: p.entryTimestamp.getTime(),
-      marginReserved: directionOf(p.direction) === 'short' ? INITIAL_MARGIN_RATE * p.quantity * p.entryPrice : 0,
-    })),
-    realizedPnL: 0,
-    startingCapital,
-    history: [],
-  };
 }
 
 export const roomsRouter = Router();

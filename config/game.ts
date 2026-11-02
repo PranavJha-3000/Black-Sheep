@@ -74,3 +74,9 @@ export const EVENT_FIRE_DELAY_MIN = 15;
 export const EVENT_FIRE_DELAY_JITTER = 6;
 /** Per-tick probability of an ambient (non-scripted) event firing. */
 export const EVENT_AMBIENT_CHANCE = 0.14;
+
+// --- World (server/world.ts) ---
+/** Seed for the live world's market RNG, used on first boot when WORLD_SEED is unset or invalid. */
+export const WORLD_SEED = 20_261_102;
+/** Name of the single persistent world humans observe. */
+export const LIVE_WORLD_NAME = 'live';

@@ -9,7 +9,6 @@ import { generateEvent, initialScheduler, maybeFireScriptedEvent, type Scheduler
 import {
   checkLiquidation,
   deriveCauseOfDeath,
-  INITIAL_MARGIN_RATE,
   liquidateFund,
   markToMarket,
   peakNav,
@@ -27,13 +26,13 @@ import {
 } from '@black-sheep/engine/rival';
 import { makeLLMDecision } from '@black-sheep/engine/rivalLLM';
 import type {
-  Direction,
   MarketEvent,
   MarketState,
   Position,
   Ticker,
 } from '@black-sheep/engine/types';
 import { prisma } from './db';
+import { enginePositionFromRow, engineFundFromRows, positionKey, realizedOfClosed } from './worldCore';
 import { EVENT_BUFFER, SNAPSHOT_EVERY_TICKS, STARTING_CAPITAL, TICK_INTERVAL_MS } from '../config/game';
 
 /**
@@ -89,64 +88,6 @@ export function withWorldLock<T>(roomId: number, fn: () => Promise<T>): Promise<
   // Swallow into the stored chain so a rejected op doesn't poison it.
   roomLocks.set(roomId, next.catch(() => undefined));
   return next;
-}
-
-function positionKey(ticker: string, direction: string, entryTimestamp: number): string {
-  return `${ticker}:${direction}:${entryTimestamp}`;
-}
-
-function enginePositionFromRow(row: {
-  id: number;
-  ticker: string;
-  direction: string;
-  quantity: number;
-  entryPrice: number;
-  entryTimestamp: Date;
-}): Position {
-  const direction: Direction = row.direction === 'short' ? 'short' : 'long';
-  return {
-    id: `db-${row.id}`,
-    ticker: row.ticker as Ticker,
-    direction,
-    quantity: row.quantity,
-    entryPrice: row.entryPrice,
-    entryTimestamp: row.entryTimestamp.getTime(),
-    // Not persisted: reconstructed from the engine's own rule (Reg-T 50%).
-    marginReserved: direction === 'short' ? INITIAL_MARGIN_RATE * row.quantity * row.entryPrice : 0,
-  };
-}
-
-/** Build an engine Fund from DB position rows (shared shape with rooms.ts engineFundFromRows). */
-function engineFundFromRows(
-  cash: number,
-  startingCapital: number,
-  rows: Array<{
-    id: number;
-    ticker: string;
-    direction: string;
-    quantity: number;
-    entryPrice: number;
-    entryTimestamp: Date;
-  }>,
-): { cash: number; positions: Position[]; realizedPnL: number; startingCapital: number; history: { timestamp: number; nav: number }[] } {
-  return {
-    cash,
-    positions: rows.map(enginePositionFromRow),
-    realizedPnL: 0,
-    startingCapital,
-    history: [],
-  };
-}
-
-function realizedOfClosed(row: {
-  direction: string;
-  quantity: number;
-  entryPrice: number;
-  exitPrice: number | null;
-}): number {
-  if (row.exitPrice === null) return 0;
-  const raw = (row.exitPrice - row.entryPrice) * row.quantity;
-  return row.direction === 'long' ? raw : -raw;
 }
 
 /** Rebuild the rival's engine fund from persisted rows (DB stores no engine objects). */
