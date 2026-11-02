@@ -89,9 +89,10 @@ export const POLICY_AGGRESSIVE_EXTENDED = 0.03;
 /**
  * Every policy: only shorts names with per-tick volatility at or below this.
  * A lone short is liquidated after a ~20% adverse move (50% initial vs 25%
- * maintenance margin), and policies only act every 10 ticks, so a name whose
- * 10-tick sigma (volatility x sqrt(10)) approaches 20% cannot be stopped out
- * in time. 0.025 keeps that sigma under 8%.
+ * maintenance margin), and policies only act every 10 ticks. Per-tick noise is
+ * uniform on +/-volatility, so the 10-tick sigma is about volatility x 1.83:
+ * ~11% for HELX (two sigma reaches the liquidation line before any stop can
+ * act, events aside), under 5% at 0.025.
  */
 export const POLICY_MAX_SHORT_VOLATILITY = 0.025;
 /** Quant: close a position at or below this fractional loss, whatever the flow says. */

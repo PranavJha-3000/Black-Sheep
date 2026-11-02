@@ -127,9 +127,10 @@ describe('decideByPolicy', () => {
 
     it('cuts the worst losing short before banking a winner', () => {
       const m0 = flatMarket();
+      // Book order PULSE, VOLT, TITAN: the first stopped position is not the worst one.
       let f = holding(fresh('aggressive'), 'PULSE', 'short', m0);
-      f = holding(f, 'TITAN', 'short', m0);
       f = holding(f, 'VOLT', 'short', m0);
+      f = holding(f, 'TITAN', 'short', m0);
       // PULSE paid out; VOLT is past its stop; TITAN is further past it.
       const m = move(move(move(m0, 'PULSE', -0.15), 'VOLT', 0.1), 'TITAN', 0.17);
       expect(decideByPolicy(AGGRESSIVE, input(f, m))).toMatchObject({ action: 'close', ticker: 'TITAN' });
