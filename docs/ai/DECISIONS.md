@@ -1,5 +1,29 @@
 # Decisions
 
+### D-022 · 2026-11-02 · Claude Opus 5.5 (Claude Code)
+**Decision:** The market lists 10 companies across 8 sectors (adds VOLT energy, FORGE industrial, CURA biotech, LEDG finance; `Sector` gains `energy | industrial`). A persisted snapshot that predates a listing gains it at its seed price on load (`addMissingCompanies` in `server/worldCore.ts`); existing companies are never touched.
+**Context:** VISION §15 asks for ~10 companies; the live world may already hold a 6-company snapshot.
+**Reasoning:** New seeds are appended after the original six, so the original companies keep their per-tick noise stream; merging on load extends a running world instead of resetting it.
+**Rejected:** Resetting the world on universe change (destroys observed history); requiring a manual migration of `snapshotJson` (error-prone, unverifiable without a DB).
+**Tradeoff accepted:** `generateEvent` picks a ticker by `rng * count`, so the ambient event sequence after this change differs from what a 6-company world would have produced.
+**Revisit if:** listings must be delisted/renamed (needs an explicit corporate-actions path).
+
+### D-021 · 2026-11-02 · Claude Opus 5.5 (Claude Code)
+**Decision:** Each personality has a pure, deterministic fallback policy (`packages/engine/src/policies.ts`, `decideByPolicy`): cautious = take profit +8% / stop −6%, else buy the deepest dip (≤ −1%) among low-volatility names (≤ 0.02); aggressive = take profit +10% / stop −8%, else short the worst recent negative event (≤ −2%), else the most overextended gainer (≥ +3%); quant = close when flow turns ≥ $250K against a position, else follow the strongest |flow| / liquidity above $250K; contrarian = the original crowd-fade twin. `enforceRiskLimit` clamps every opening decision — policy **and** LLM — to `maxPositionFraction × availableCash` and turns an unaffordable open into a hold. Thresholds live in `config/game.ts` (`POLICY_*`).
+**Context:** VISION §6 gives every fund a rule-based fallback, and §12 requires the world to run with no provider key. Before Stage 3 every fund fell back to the same contrarian twin.
+**Reasoning:** In-character fallbacks keep the three funds distinguishable when a provider is down or no key is configured; clamping LLM sizes enforces the fund's risk limit regardless of what the model proposes ("LLM proposes, engine validates").
+**Rejected:** One shared fallback (funds become indistinguishable without a key); trusting the model's sizing (a hallucinated "all in" would breach the mandate).
+**Tradeoff accepted:** Policies are simple heuristics, not alpha; they exist to keep the world alive and in character.
+**Revisit if:** Stage 4 tool use gives models richer actions than buy/short/close/hold.
+
+### D-020 · 2026-11-02 · Claude Opus 5.5 (Claude Code)
+**Decision:** Fund identity is configuration. `config/funds.ts` (`FUND_REGISTRY`) lists three funds — STERLING & VALE (cautious value/macro, 12% max position, offset 0), HALDEN WHITMORE (aggressive event-driven short seller, 20%, offset 3), CROWN MERIDIAN (quant flow-momentum, 15%, offset 6) — each deciding every 10 ticks in its own staggered slot. `config/models.ts` (`MODEL_REGISTRY`) holds per-model pricing (USD/MTok: Opus 5.5 4/20, Sonnet 5.5 2/10, Haiku 5.5 0.10/0.50) and effort. Every fund uses `claude-opus-5-5` at effort `low`, `max_tokens` 2048. A registry entry is matched to its `Fund` row **by name** (already `@@unique([worldId, name])`); missing registry funds are upserted on load; funds outside the registry (Stage 2's `APEX CAPITAL`) stay observable and liquidatable but never decide. The public payload carries each fund's `profile` (key, personality, mandate, strategy, model) or `null`.
+**Context:** VISION §5–6 and §15 call for ~3 distinct funds with their own mandate, model and risk limits; Stage 2 ran a single contrarian rival.
+**Reasoning:** Config keeps adding a fund a one-entry change and keeps the engine pure. Name-as-identity avoids a migration that cannot be verified without a database, and a renamed fund starting fresh protects track-record integrity. Opus 5.5 is the current default model; cheaper models are a one-line registry change once the user names one. Effort `low` and staggered slots bound cost and keep one fund's slow call from blocking the others.
+**Rejected:** A `Fund.profileKey` column + migration (unverifiable now, no functional gain yet); deleting the legacy APEX fund (destroys observed history); hardcoding fund identities in `server/world.ts`.
+**Tradeoff accepted:** With a key configured the world makes ~3.6 Opus calls a minute (≈ one per fund per 50 s) with no budget cap until Stage 4's cost meter.
+**Revisit if:** funds need renaming without losing history (add a stable key column), or Stage 4 budgets demand cheaper default models.
+
 ### D-019 · 2026-11-02 · Claude Opus 5.5 (Claude Code)
 **Decision:** Every fund, AI included, is subject to server-authoritative liquidation (`liquidateFunds` in `server/world.ts`). A liquidated fund stays visible to observers but never decides again (`shouldFundDecide` gates on `liquidated`, and `decideRival` drops a decision that resolves after its fund died). `LiquidationLog.rivalContext` is written as `null`.
 **Context:** Before Stage 2 only human funds could be liquidated, and `computeRivalContext` narrated the death relative to the rival. With no humans, that left the only funds in the world immortal.

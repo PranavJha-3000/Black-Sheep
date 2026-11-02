@@ -1,5 +1,12 @@
 # Rollback
 
+## Stage 3 fund registry · 2026-11-02
+Safe commit: `d4936e3` (main). Work lives on branch `feat/stage3-fund-registry`.
+Revert with: `git switch main` (branch unmerged), or after merge `git revert -m 1 <merge commit>`.
+Files touched: `config/{funds,models}.ts` (new), `config/game.ts`, `packages/engine/src/{funds,policies}.ts` + tests (new), `packages/engine/src/{rivalLLM,rivalLLM.test,market,types}.ts`, `server/{world,worldCore,worldCore.test,worldRoutes}.ts`, `src/components/{FundsStrip (new),Terminal,StockChart}.tsx`, `src/store/{gameStore,stateMapper,stateMapper.test}.ts`, `src/engine.test.ts`, `docs/**`.
+Non-code changes to undo: no schema change, no migration. A database that ran this stage holds three extra `Fund` rows (the registry funds) and snapshots with 10 companies; reverted Stage 2 code still loads them: it keeps trading the 10-company snapshot and treats the lowest-id fund as its single rival. To return to a clean 6-company world, `docker compose down -v` (DESTROYS all world data).
+Re-check after rollback: `npm run typecheck`; `npm test`; `npm run lint`; `npm run build`.
+
 ## Stage 2 global live world · 2026-11-02
 Safe commit: `cdd1ca7` (main). Work lives on branch `feat/stage2-global-world`.
 Revert with: `git switch main` (branch unmerged), or after merge `git revert cdd1ca7..<last Stage 2 commit>`.

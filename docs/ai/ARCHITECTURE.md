@@ -4,14 +4,16 @@
 | Module | Responsibility | Talks to |
 |---|---|---|
 | `packages/engine` (`@black-sheep/engine`) | THE shared pure engine: market evolution/impact/flow, portfolio lifecycle, events, rival shell + LLM brain. UI-free, imported by client AND server | nothing |
+| `config/funds.ts`, `config/models.ts` | Literal-only registries: the AI funds (identity, mandate, strategy, model, risk limit, cadence slot) and the models they may use (pricing, effort). Dependency-free so the engine can import them | nothing |
+| `packages/engine/src/funds.ts`, `policies.ts` | Typed `FundProfile` view of the registry; per-personality deterministic fallback policies and `enforceRiskLimit` | config |
 | `server/db.ts` | PrismaClient singleton | @prisma/client |
 | `server/auth.ts` | Register/login (bcrypt, JWT), `requireAuth` middleware, `wrap()` async guard. Still mounted; the observer client no longer uses accounts | db |
-| `server/worldCore.ts` | PURE world rules, no I/O: DB-row → engine shapes, `resolveWorldSeed`, `parseWorldSnapshot`, `shouldFundDecide`, `buildWorldStatePayload` (the public payload and its `WorldStatePayload` type) | engine |
-| `server/world.ts` | The single live world (`ensureLiveWorld`, `getLiveWorld`, `withWorldLock`, `startWorldLoop`); 5s loop; snapshots + event logs; fund decision cycle + state-diff persistence; **liquidation of every fund** (`liquidateFunds`); **peak NAV tracking** (`trackPeakNav`) | db, engine, worldCore |
+| `server/worldCore.ts` | PURE world rules, no I/O: DB-row → engine shapes, `resolveWorldSeed`, `parseWorldSnapshot`, `addMissingCompanies`, `missingRegistryFunds`, `shouldFundDecide` (per-fund cadence/offset), `buildWorldStatePayload` (the public payload and its `WorldStatePayload` type) | engine |
+| `server/world.ts` | The single live world (`ensureLiveWorld`, `getLiveWorld`, `withWorldLock`, `startWorldLoop`); 5s loop; snapshots + event logs; **one `Agent` per registered fund** (own cadence slot, pending flag, brain) + state-diff persistence; **liquidation of every fund** (`liquidateFunds`); **peak NAV tracking** (`trackPeakNav`) | db, engine, worldCore |
 | `server/worldRoutes.ts` | `GET /world/state` — public, no auth; builds the payload via `buildWorldStatePayload` | db, world, worldCore |
 | `server/index.ts` | Express app, routes (`/auth`, `/world`), error handler, world clock start | all server modules |
 | `prisma/schema.prisma` | Postgres schema: User, World, Fund, Position, MarketTick, MarketEventLog, RivalDecisionLog, LiquidationLog. Init migration in `prisma/migrations/20261102000000_init` | @prisma/client |
-| `src/store/gameStore.ts` | Read-only zustand projection of public `GET /world/state` (polled every 2.5s); focuses the lowest-id fund; no auth, lobby, local simulation or trading | engine, server API |
+| `src/store/gameStore.ts` | Read-only zustand projection of public `GET /world/state` (polled every 2.5s); focuses the lowest-id fund and summarises every fund (`funds`) for `FundsStrip`; no auth, lobby, local simulation or trading | engine, server API |
 | `src/components/*` | Terminal UI (Hero, Mid, RivalPanel = FUND INTEL, FundSummaryPanel, PositionRow…). `App` renders only `<Terminal/>` | gameStore |
 | `scripts/verify-backend.ps1` | One-command backend acceptance test (db → migrate → server → unattended tick growth) | docker, prisma, server |
 
@@ -21,7 +23,7 @@
 - **LiquidationLog**: append-only record of each fund liquidation — the definitive "this fund died here, for this reason" fact. Written server-authoritatively by `liquidateFunds` for any fund. `rivalContext` is a legacy column, always null since Stage 2 (D-019).
 - **Fund.peakNav**: all-time high NAV, updated by the tick loop (`trackPeakNav`) (the post-trade `updatePeakNav` hook was removed with human trading in Stage 1). Display stat (result cards removed in Stage 1).
 - **Fund.liquidated**: boolean set server-authoritatively when `checkLiquidation` flags a margin breach. The fund stays visible to observers (`LIQUIDATED — cause` in FundSummaryPanel) and stops deciding (D-019).
-- **World process:** one in-memory `World` — the persisted `World` row named `live` (market + scheduler + its fund). The loop mutates memory, persists snapshots/logs/decision deltas; a restart rebuilds from the latest snapshot (corrupt → throws) + Fund/Position rows + last RivalDecisionLog entry, keeping the persisted seed (D-018).
+- **World process:** one in-memory `World` — the persisted `World` row named `live` (market + scheduler + one `Agent` per registry fund). The loop mutates memory, persists snapshots/logs/decision deltas; a restart rebuilds from the latest snapshot (corrupt → throws) + Fund/Position rows + last RivalDecisionLog entry, keeping the persisted seed (D-018).
 - **Secrets:** `ANTHROPIC_API_KEY` and `JWT_SECRET` live in `.env`, read server-side only. Only the server calls the LLM provider (the Vite browser proxy was removed in Stage 1).
 
 ## Boundaries

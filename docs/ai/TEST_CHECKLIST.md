@@ -58,3 +58,11 @@ Run before any change counts as done.
 - [ ] (Needs DB) `curl localhost:3001/world/state` with NO token → `world.name = "live"`, `funds.length >= 1`
 - [ ] (Needs DB) restart the server with a different `WORLD_SEED` env → `[world] WORLD_SEED=… ignored` warning; `world.seed` unchanged
 - [ ] (Needs DB) force a fund past maintenance margin → `Fund.liquidated = true`, `LiquidationLog.rivalContext` null, and no new `RivalDecisionLog` rows for that fund afterwards
+
+### Stage 3 — fund registry
+- [ ] `npm test` includes `packages/engine/src/{funds,policies}.test.ts` (registry shape, staggered offsets, 10 companies, every policy's triggers, size cap, zero-cash) and the per-fund brain tests in `rivalLLM.test.ts`
+- [ ] `git grep -n "claude-sonnet-4-6\|rivalPending\|rivalFundId" -- packages server src` → no output
+- [ ] Vite dev → FundsStrip shows one card per fund once the server answers; the chart's ticker list shows 10 companies
+- [ ] (Needs DB) first boot: `/world/state` lists STERLING & VALE, HALDEN WHITMORE, CROWN MERIDIAN with `profile` set; an existing `APEX CAPITAL` row has `profile: null` and gains no new `RivalDecisionLog` rows
+- [ ] (Needs DB) without a key: within ~60s each registry fund logs a decision on its own tick slot (tickCountAt % 10 = 0 / 3 / 6)
+- [ ] (Needs DB) restart on a pre-Stage-3 snapshot → `market.companies` has 10 entries and the original six keep their prices
