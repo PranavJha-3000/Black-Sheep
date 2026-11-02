@@ -3,9 +3,10 @@ import { createInitialMarket } from '@black-sheep/engine/market';
 import { buildWorldStatePayload, type FundInput } from '../../server/worldCore';
 import { STARTING_CAPITAL } from '../../config/game';
 
-const pending: { path: string; resolve: (v: unknown) => void }[] = [];
+const pending: { path: string; opts?: { method?: string; body?: unknown; token?: string }; resolve: (v: unknown) => void; reject: (e: unknown) => void }[] = [];
 vi.mock('./api', () => ({
-  apiFetch: (path: string) => new Promise((resolve) => pending.push({ path, resolve })),
+  apiFetch: (path: string, opts?: { method?: string; body?: unknown; token?: string }) =>
+    new Promise((resolve, reject) => pending.push({ path, opts, resolve, reject })),
 }));
 
 import { useGameStore } from './gameStore';
@@ -71,5 +72,58 @@ describe('gameStore ANALYTICS polling', () => {
     void useGameStore.getState().poll();
     expect(pending.some((p) => p.path === '/world/state')).toBe(true);
     expect(pending.some((p) => p.path === '/world/analytics')).toBe(false);
+  });
+});
+
+describe('gameStore RESEARCH LAB', () => {
+  beforeEach(() => {
+    pending.length = 0;
+    useGameStore.setState({ view: 'world', selectedFundId: null, fundId: null, selectedExperimentId: null, lab: { list: null, detail: null } });
+  });
+
+  it('fetches the experiment list only in the lab view, and the detail once one is opened', async () => {
+    void useGameStore.getState().poll();
+    expect(pending.some((p) => p.path.startsWith('/lab'))).toBe(false);
+    pending.length = 0;
+    useGameStore.getState().setView('lab');
+    expect(pending.map((p) => p.path)).toContain('/lab/experiments');
+    pending.forEach((p) => p.resolve(p.path === '/world/state' ? world : { experiments: [{ id: 4 }] }));
+    await flush();
+    expect(useGameStore.getState().lab.list).toEqual([{ id: 4 }]);
+    pending.length = 0;
+    useGameStore.getState().openExperiment(4);
+    expect(pending.map((p) => p.path)).toContain('/lab/experiments/4');
+  });
+
+  it('drops a detail that answers an experiment no longer selected', async () => {
+    useGameStore.setState({ view: 'lab' });
+    useGameStore.getState().openExperiment(1);
+    const first = pending.find((p) => p.path === '/lab/experiments/1')!;
+    useGameStore.getState().openExperiment(2);
+    pending
+      .filter((p) => p.path !== '/lab/experiments/1')
+      .forEach((p) => p.resolve(p.path === '/world/state' ? world : p.path === '/lab/experiments/2' ? { id: 2 } : { experiments: [] }));
+    await flush();
+    first.resolve({ id: 1 });
+    await flush();
+    expect(useGameStore.getState().lab.detail).toEqual({ id: 2 });
+  });
+
+  it('creates an experiment with the bearer token, never storing the token, then opens it', async () => {
+    useGameStore.setState({ view: 'lab' });
+    const done = useGameStore.getState().createExperiment({ name: 'x' }, 's3cret');
+    const post = pending.find((p) => p.opts?.method === 'POST')!;
+    expect(post.path).toBe('/lab/experiments');
+    expect(post.opts).toEqual({ method: 'POST', body: { name: 'x' }, token: 's3cret' });
+    post.resolve({ id: 9 });
+    await expect(done).resolves.toEqual({ ok: true, id: 9 });
+    expect(useGameStore.getState().selectedExperimentId).toBe(9);
+    expect(JSON.stringify(useGameStore.getState())).not.toContain('s3cret');
+  });
+
+  it('reports a rejected create as an error message', async () => {
+    const done = useGameStore.getState().createExperiment({ name: 'x' }, 'bad');
+    pending.find((p) => p.opts?.method === 'POST')!.reject(new Error('A valid lab admin token is required'));
+    await expect(done).resolves.toEqual({ ok: false, error: 'A valid lab admin token is required' });
   });
 });
