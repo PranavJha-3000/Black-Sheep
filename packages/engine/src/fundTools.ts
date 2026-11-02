@@ -12,6 +12,7 @@
  */
 
 import { availableCash, positionPnl } from './portfolio';
+import { recallMemory } from './memory';
 import { maxNewPositionDollars } from './policies';
 import { normaliseDecision } from './rivalLLM';
 import type { FundProfile } from './funds';
@@ -58,6 +59,20 @@ export const FUND_TOOLS: ToolSpec[] = [
     input_schema: {
       type: 'object',
       properties: { ticker: { type: 'string', description: 'Optional ticker filter' } },
+      required: [],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'recall_memory',
+    description: 'Your own persisted memory: past trades and outcomes (episodic), summaries of recent results (reflective) and other funds’ public moves against or alongside your book (relationship). Newest first.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        kind: { type: 'string', enum: ['episodic', 'reflective', 'relationship'], description: 'Optional kind filter' },
+        subject: { type: 'string', description: 'Optional ticker or fund name filter' },
+        limit: { type: 'integer', description: 'Max entries (default 10, max 20)' },
+      },
       required: [],
       additionalProperties: false,
     },
@@ -148,6 +163,21 @@ export function runFundTool(name: string, args: unknown, input: RivalDecisionInp
     case 'recent_events': {
       const ticker = tickerArg(args);
       return { ok: true, output: ticker ? input.events.filter((e) => e.ticker === ticker) : input.events };
+    }
+    case 'recall_memory': {
+      const a = (args && typeof args === 'object' ? args : {}) as Record<string, unknown>;
+      const kind = a.kind;
+      if (kind !== undefined && kind !== 'episodic' && kind !== 'reflective' && kind !== 'relationship') {
+        return fail(`unknown memory kind ${String(kind)}`);
+      }
+      return {
+        ok: true,
+        output: recallMemory(input.memory ?? [], {
+          kind,
+          subject: typeof a.subject === 'string' ? a.subject : undefined,
+          limit: typeof a.limit === 'number' ? a.limit : undefined,
+        }),
+      };
     }
     default:
       return fail(`unknown tool ${name}`);

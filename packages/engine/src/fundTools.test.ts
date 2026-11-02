@@ -17,10 +17,29 @@ function input(withPosition = false, events: MarketEvent[] = []): RivalDecisionI
   return buildDecisionInput(fund, m, events, []);
 }
 
+describe('recall_memory tool', () => {
+  it('returns the fund own memories newest first, filtered, and an empty list without memory', () => {
+    const memory = [
+      { kind: 'episodic' as const, tickCountAt: 1, subject: 'NOVA', content: 'a', importance: 0.5, outcomeUsd: null },
+      { kind: 'relationship' as const, tickCountAt: 2, subject: 'HALDEN WHITMORE', content: 'b', importance: 0.6, outcomeUsd: null },
+      { kind: 'episodic' as const, tickCountAt: 3, subject: 'NOVA', content: 'c', importance: 0.5, outcomeUsd: null },
+    ];
+    const r = runFundTool('recall_memory', { subject: 'NOVA' }, { ...input(), memory }, PROFILE);
+    expect(r).toEqual({ ok: true, output: [memory[2], memory[0]] });
+    const k = runFundTool('recall_memory', { kind: 'relationship' }, { ...input(), memory }, PROFILE);
+    expect(k.output).toEqual([memory[1]]);
+    expect(runFundTool('recall_memory', {}, input(), PROFILE)).toEqual({ ok: true, output: [] });
+  });
+
+  it('rejects an unknown kind', () => {
+    expect(runFundTool('recall_memory', { kind: 'secrets' }, input(), PROFILE).ok).toBe(false);
+  });
+});
+
 describe('fund tools', () => {
   it('declares strict schemas for every tool, including the terminal submit_decision', () => {
     const names = FUND_TOOLS.map((t) => t.name);
-    expect(names).toEqual(['inspect_company', 'inspect_portfolio', 'calculate_risk', 'recent_events', SUBMIT_DECISION]);
+    expect(names).toEqual(['inspect_company', 'inspect_portfolio', 'calculate_risk', 'recent_events', 'recall_memory', SUBMIT_DECISION]);
     for (const t of FUND_TOOLS) {
       expect(t.input_schema.type).toBe('object');
       expect(t.input_schema.additionalProperties).toBe(false);

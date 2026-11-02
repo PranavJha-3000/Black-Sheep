@@ -119,3 +119,14 @@ export const EVENT_AMBIENT_CHANCE = 0.14;
 export const WORLD_SEED = 20_261_102;
 /** Name of the single persistent world humans observe. */
 export const LIVE_WORLD_NAME = 'live';
+
+// --- Agent memory (packages/engine/src/memory.ts, server/world.ts) ---
+/** A reflection is written once this many closed trades accumulate since the last one. */
+export const MEMORY_REFLECT_EVERY_CLOSES = 3;
+/** Most recent memories per fund kept in the process (and loaded on boot). */
+export const MEMORY_LOAD_LIMIT = 40;
+/** Memories shown in the decision prompt. */
+export const MEMORY_PROMPT_ENTRIES = 6;
+/** recall_memory default and maximum result sizes. */
+export const MEMORY_RECALL_DEFAULT = 10;
+export const MEMORY_RECALL_MAX = 20;
