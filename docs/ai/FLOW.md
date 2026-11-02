@@ -55,3 +55,14 @@ Entry: `server/world.ts → rememberDecision(w, agent, after)` (inside the world
 Assumptions: one server process (memory is cached in process).
 Side effects: `AgentMemory` writes; no provider calls.
 Fragile: memory text is shown verbatim to the model and to observers — keep it free of other funds' sizes (D-017).
+
+## Observer investigation (`GET /world/funds/:id/trace`, `GET /world/activity`, D-027)
+Entry: `server/worldRoutes.ts` → `ensureLiveWorld()` → pure builders in `server/observerCore.ts`
+
+1. `/funds/:id/trace`: id must be digits and a fund of the live world, else 404. Load the newest 20 `RivalDecisionLog` rows with `llmCall` → `toolCalls` (id order); `buildFundTrace` copies listed fields, nests `call` (null for policy decisions), truncates tool JSON, adds the agent's memory newest first.
+2. `/activity`: the newest 40 decisions, model calls (with tool calls), market events and liquidations of the live world → `buildActivity` merges them newest first and caps at 40.
+3. Client: `gameStore.poll()` fetches `/world/state` always, the trace only in FUND DETAIL, the activity feed only in ACTIVITY; `projectState(raw, prev, selectedFundId)` focuses the selected fund.
+
+Assumptions: observers are humans; agents never call these routes.
+Side effects: reads only.
+Fragile: every field added to a builder is public; keep `observerCore.test.ts`'s field allow-list green.

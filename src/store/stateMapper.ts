@@ -26,6 +26,8 @@ export interface ProjectionPrev {
   priceHistory: Record<Ticker, number[]>;
   navHistory: number[];
   rivalDecisionKey: string;
+  /** Fund the previous projection focused; a change starts a fresh NAV history. */
+  focusFundId?: number | null;
 }
 
 /** One fund's line in the funds strip: every fund in the world, at a glance. */
@@ -90,11 +92,16 @@ function isMarketEventType(t: string): MarketEventType {
   return t === 'earnings' || t === 'macro' || t === 'sector' || t === 'company' ? t : 'company';
 }
 
-export function projectState(raw: WorldStatePayload, prev: ProjectionPrev): Projection {
+export function projectState(raw: WorldStatePayload, prev: ProjectionPrev, focusId: number | null = null): Projection {
   const companies = raw.market.companies as Record<Ticker, Company>;
-  // Focus the lowest-id registered fund; a legacy fund outside the registry
-  // never decides, so it only takes focus when nothing else exists.
-  const focus = raw.funds.find((f) => f.profile !== null) ?? raw.funds[0] ?? null;
+  // Focus the observer's selected fund; otherwise the lowest-id registered
+  // fund — a legacy fund outside the registry never decides, so it only takes
+  // focus when nothing else exists.
+  const focus =
+    raw.funds.find((f) => f.id === focusId) ?? raw.funds.find((f) => f.profile !== null) ?? raw.funds[0] ?? null;
+  // A different fund's NAV must not continue the previous fund's trail.
+  const focusChanged = prev.focusFundId !== undefined && prev.focusFundId !== (focus?.id ?? null);
+  const priorNav = focusChanged ? [] : prev.navHistory;
 
   // --- focus fund (seed fund while the world has none) ----------------------
   const fundBase: Fund = {
@@ -112,11 +119,11 @@ export function projectState(raw: WorldStatePayload, prev: ProjectionPrev): Proj
         marginReserved: p.marginReserved,
       }),
     ),
-    history: prev.navHistory.map((nav) => ({ timestamp: 0, nav })),
+    history: priorNav.map((nav) => ({ timestamp: 0, nav })),
   };
 
   const d = derive({ companies }, fundBase);
-  const navHistory = [...prev.navHistory, d.nav].slice(-HISTORY_CAP);
+  const navHistory = [...priorNav, d.nav].slice(-HISTORY_CAP);
   const fund: Fund = {
     ...fundBase,
     history: [...fundBase.history, { timestamp: raw.world.timestamp, nav: d.nav }],

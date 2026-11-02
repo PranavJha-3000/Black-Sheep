@@ -1,5 +1,12 @@
 # Rollback
 
+## Stage 6 observer UI · 2026-11-02
+Safe commit: `76b6bde` (main). Work lives on branch `feat/stage6-observer-ui`.
+Revert with: `git switch main` (branch unmerged), or after merge `git revert -m 1 <merge commit>`.
+Files touched: `config/game.ts`, `server/{observerCore (new),worldRoutes}.ts` + `observerCore.test.ts`, `src/store/{gameStore,stateMapper,stateMapper.test}.ts`, `src/components/{Terminal,TopBar,Mid,Foot,FundsStrip}.tsx`, `src/components/fmt.ts`, `src/components/{FundsView,FundDetailView,ActivityView}.tsx` (new), `docs/**`.
+Non-code changes to undo: none — no schema change, no migration, no new dependency.
+Re-check after rollback: `npm run typecheck`; `npm test`; `npm run lint`; `npm run build`.
+
 ## Stage 5 agent memory · 2026-11-02
 Safe commit: `0d5337a` (main). Work lives on branch `feat/stage5-agent-memory`.
 Revert with: `git switch main` (branch unmerged), or after merge `git revert -m 1 <merge commit>`.

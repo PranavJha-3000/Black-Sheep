@@ -13,9 +13,22 @@ import { apiFetch } from './api';
 import { projectState } from './stateMapper';
 import type { FundSummary, ProjectionPrev } from './stateMapper';
 import type { WorldStatePayload } from '../../server/worldCore';
+import type { ActivityPayload, FundTracePayload } from '../../server/observerCore';
 import { STARTING_CAPITAL } from '../../config/game';
 
+/** Observer navigation (VISION §13). TIMELINE, RESEARCH LAB and ANALYTICS come later. */
+export type ObserverView = 'world' | 'funds' | 'fund' | 'activity';
+
 export interface GameStoreState {
+  view: ObserverView;
+  /** The fund FUND DETAIL investigates; the focus projection follows it. */
+  selectedFundId: number | null;
+  /** FUND DETAIL's decision traces and memory (fetched only in that view). */
+  trace: FundTracePayload | null;
+  /** The ACTIVITY feed (fetched only in that view). */
+  activity: ActivityPayload | null;
+  setView: (view: ObserverView) => void;
+  openFund: (fundId: number) => void;
   /** The focus fund's DB id (lowest id in the world). Null before a fund exists. */
   fundId: number | null;
   /** The focus fund's display name. */
@@ -76,7 +89,10 @@ const SEED_FUND = createFund(STARTING_CAPITAL, 0);
 // Store
 // ---------------------------------------------------------------------------
 
-type SeedState = Omit<GameStoreState, 'reset' | 'selectTicker' | 'poll' | 'selectedTicker'>;
+type SeedState = Omit<
+  GameStoreState,
+  'reset' | 'selectTicker' | 'poll' | 'selectedTicker' | 'view' | 'selectedFundId' | 'trace' | 'activity' | 'setView' | 'openFund'
+>;
 
 function seedState(): SeedState {
   return {
@@ -118,23 +134,49 @@ function seedState(): SeedState {
 export const useGameStore = create<GameStoreState>((set, get) => ({
   ...seedState(),
   selectedTicker: 'NOVA' as Ticker,
+  view: 'world' as ObserverView,
+  selectedFundId: null,
+  trace: null,
+  activity: null,
   // ---------------------------------------------------------------------------
   // Actions
   // ---------------------------------------------------------------------------
 
   reset: () => set(seedState()),
   selectTicker: (ticker: Ticker) => set({ selectedTicker: ticker }),
+  setView: (view: ObserverView) => {
+    set({ view });
+    void get().poll();
+  },
+  openFund: (fundId: number) => {
+    set({ view: 'fund', selectedFundId: fundId, trace: null });
+    void get().poll();
+  },
   poll: async () => {
     try {
-      const { priceHistory, navHistory, rivalDecisionKey } = get();
-      const raw = await apiFetch<WorldStatePayload>('/world/state');
+      const { priceHistory, navHistory, rivalDecisionKey, fundId, view, selectedFundId } = get();
+      // Only the open view's investigation endpoint is polled.
+      const [raw, trace, activity] = await Promise.all([
+        apiFetch<WorldStatePayload>('/world/state'),
+        view === 'fund' && selectedFundId !== null
+          ? apiFetch<FundTracePayload>(`/world/funds/${selectedFundId}/trace`).catch(() => null)
+          : Promise.resolve(null),
+        view === 'activity' ? apiFetch<ActivityPayload>('/world/activity').catch(() => null) : Promise.resolve(null),
+      ]);
 
       const prev: ProjectionPrev = {
         priceHistory,
         navHistory,
         rivalDecisionKey,
+        focusFundId: fundId,
       };
-      const p = projectState(raw, prev);
+      // The selection changed while this poll was in flight: a newer poll owns
+      // the focus, so this projection (built for the old fund) is dropped.
+      if (get().selectedFundId !== selectedFundId) return;
+      const p = projectState(raw, prev, selectedFundId);
+      // A trace answering an older selection is dropped.
+      if (trace && trace.fundId === get().selectedFundId) set({ trace });
+      if (activity) set({ activity });
 
       set({
         fundId: p.fundId,

@@ -1,8 +1,8 @@
 # Handover
 
 ## Current state
-- Working: **Stage 5 agent memory complete** (branch `feat/stage5-agent-memory`). Each registered fund remembers its filled trades, closes and liquidation (episodic), summarises every 3 closes (reflective) and notes other funds' public moves on its book (relationship); memory persists in `AgentMemory`, is shown in the decision prompt and through `recall_memory`, and observers see the 5 newest per fund (D-026). Memory is not learning — no model or policy changes. Stages 1–4 are merged to `main`.
-- In progress: nothing. Stage 6 (observer UI) is next.
+- Working: **Stage 6 observer UI complete** (branch `feat/stage6-observer-ui`). The terminal is an observer with WORLD, FUNDS, FUND DETAIL and ACTIVITY views; FUND DETAIL shows a fund's mandate, book, memory and each decision's model call and tool calls; ACTIVITY merges decisions, calls, tools, events and liquidations (D-027). Stages 1–5 are merged to `main`.
+- In progress: nothing. Stage 7 (metrics, analytics, World Director) is next.
 - Broken: nothing known — typecheck, tests, lint and build green. Live-DB and live-provider behaviour UNVERIFIED (no Postgres, no key used).
 - Avoid: Do not duplicate engine logic — import `@black-sheep/engine/*`. Every async Express route goes through `wrap()`. Prisma pinned to v6. Never call an LLM from the browser (VISION §14.9). Every field added to `buildWorldStatePayload` is public. Run ONE server process per DB. A fund's identity is its registry `name` — renaming an entry starts a new fund.
 
@@ -10,13 +10,13 @@
 - [ ] Delete parked branch `wip/stage2-global-world` (user decision; nothing from it was merged).
 - [ ] **Cost (Stage 4):** with a key, spend is capped at $2/fund/day and $10/day overall (`config/funds.ts`, `config/game.ts`). Never verified against a live key — first live run: watch `LlmCallLog` cost per call vs the ~$0.47 worst-case estimate.
 - [ ] `npm audit` reports high/critical advisories in express (body-parser, qs, proxy-addr) and prisma (deepmerge-ts) transitive deps — pre-existing, not from `@anthropic-ai/sdk`; upgrade in a deps pass.
+- [ ] Stage 6 review minors (deferred): a failed trace fetch shows "Loading…" forever; ACTIVITY shows the previous feed on re-entry until the next poll; each nav click fires an extra full poll (add an in-flight guard); `aria-current` on nav, `aria-expanded` on decision rows, block content inside FundsStrip buttons; index keys in activity/memory/tool lists; raw provider error text is public in traces; tool items can crowd the 40-item activity feed.
 - [ ] Stage 5 review minors (deferred): liquidation's forced closes are absent from reflections; memory writes are sequential awaits inside the world lock (batch into one `createMany` if funds grow); `recall_memory` output and the prompt memory section are not in the budget estimate (settlement uses real cost); per-kind memory cap; reflection ordering relies on one `createMany` inserting in VALUES order; `AgentMemory` retention.
 - [ ] Stage 4 review minors (deferred): straddling-midnight calls are dropped from the in-memory day but re-counted by the boot seed (conservative); strip spend includes the held estimate while THINKING; `inspect_company` description advertises "beta, rate sensitivity" that the view lacks; a create() failure after server-side work settles at $0; `lastLlmInput` is still set after an `error`/`no_decision` call, so the model waits for the next material change. Live-only questions: thinking-block replay after a server-side fallback, whether fallback `usage` includes the failed attempt, truncated `tool_use` on `max_tokens`.
 - [ ] Stage 3 review minors (deferred): `funds.test` doesn't reject `decisionEveryTicks <= 0`; FundsStrip grid is fixed-width at 3 columns on large screens.
 - [ ] Legacy `APEX CAPITAL` fund (Stage 2) stays in an existing world as an observed, non-deciding fund (D-020) — decide whether to retire it in a schema/data pass.
 - [ ] Stage 2 review minors (deferred): `/world/state` + tick loop are N+1 (add `@@index([fundId, timestamp])` on RivalDecisionLog, batch queries); route reads `w.market` outside the lock; ticks can queue if one exceeds 5s; failed world load retries every tick/poll; latest snapshot picked by timestamp not id and MarketTick is never pruned; restart loses ≤2 ticks; `verify-backend.ps1` should use `prisma migrate deploy`; `decideRival` mutates memory before persist succeeds (pre-existing).
 - [ ] Confirm: should the public payload expose `world.seed`? With the client-side engine it lets observers predict upcoming price noise (kept for now; observers cannot act).
-- [ ] **Observer UI (VISION §13):** the terminal still focuses one fund (`funds[0]`) with player-shaped copy ("YOUR POSITIONS", RAVEN CAPITAL branding, "Select NOVA… and BUY"); build a multi-fund observer view.
 - [ ] Multi-process writer: Postgres advisory-lock leader election (D-016 revisit) before running more than one server process.
 - [ ] `detectConfrontation` (engine) now has no app caller — reuse it for relationship memory in Stage 5 or remove it.
 - [ ] `LiquidationLog.rivalContext` is always null (D-019) and `server/auth.ts` / `User` are unused by the client — drop or repurpose in a schema pass.
@@ -25,6 +25,12 @@
 - [ ] Live-DB verification still blocked on WSL/Docker (`wsl --install -d Ubuntu`, reboot, then `scripts/verify-backend.ps1`). The init migration exists; run `npx prisma migrate deploy` (not `migrate dev --name init`, which would create a second migration) on first DB boot.
 
 ## Log
+
+### 2026-11-02 · Claude Opus 5.5 (Claude Code) · Stage 6 observer UI
+CHANGED: New `server/observerCore.ts` (decision traces, activity feed) and routes `GET /world/funds/:id/trace`, `GET /world/activity`; store `view`/`selectedFundId`/`trace`/`activity` and selected-fund focus; new `FundsView`, `FundDetailView`, `ActivityView`; Terminal nav + BLACK SHEEP branding; player-era copy removed.
+WHY: VISION §13 views 1–4. See D-027.
+VERIFY: `npm run typecheck` 0, `npm test` 190/190, `npm run lint` 0, `npm run build` ✓; Vite smoke — WORLD/FUNDS/ACTIVITY render empty states with no uncaught errors, `/world/activity` requested only in ACTIVITY.
+NOT VERIFIED: any view with real data (no DB; a stale server not started by this session answered :3001 with 404s).
 
 ### 2026-11-02 · Claude Opus 5.5 (Claude Code) · Stage 5 agent memory
 CHANGED: Engine `memory.ts` (episodes, reflections, relationship notes, `selectMemories`, `recallMemory`); `RivalDecisionInput.memory`; prompt memory section; `recall_memory` tool. Server: `AgentMemory` model + migration `20261102030000_agent_memory`; `loadMemory` on boot, `remember`/`rememberDecision` after each applied decision and on liquidation; `/world/state` `funds[].memory` (5 newest).

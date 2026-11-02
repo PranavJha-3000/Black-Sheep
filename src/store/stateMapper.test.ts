@@ -40,6 +40,26 @@ function seededPrev(): ProjectionPrev {
 const EMPTY_PREV: ProjectionPrev = { priceHistory: {} as ProjectionPrev['priceHistory'], navHistory: [], rivalDecisionKey: '' };
 
 describe('stateMapper (poll → terminal projection)', () => {
+  describe('selected fund focus (observer FUND DETAIL)', () => {
+    const world = () => payload([fund(1, { name: 'A' }), fund(2, { name: 'STERLING & VALE' }), fund(3, { name: 'CROWN MERIDIAN' })]);
+
+    it('focuses the selected fund when it exists', () => {
+      expect(projectState(world(), seededPrev(), 3).fundId).toBe(3);
+    });
+
+    it('falls back to the default focus for an unknown or missing selection', () => {
+      const def = projectState(world(), seededPrev()).fundId;
+      expect(projectState(world(), seededPrev(), 99).fundId).toBe(def);
+      expect(projectState(world(), seededPrev(), null).fundId).toBe(def);
+    });
+
+    it('starts a fresh NAV history when the focus changes, and keeps it otherwise', () => {
+      const prev = { ...seededPrev(), navHistory: [1, 2, 3], focusFundId: 2 };
+      expect(projectState(world(), prev, 3).navHistory).toHaveLength(1);
+      expect(projectState(world(), prev, 2).navHistory).toHaveLength(4);
+    });
+  });
+
   it('projects prices, fund and NAV from the wire', () => {
     const p = projectState(payload([fund(1)]), seededPrev());
     expect(p.tickCount).toBe(10);
