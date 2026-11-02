@@ -65,6 +65,28 @@ export const CROWD_FRAC = 0.02;
 /** ...and the absolute flow exceeds this many dollars. */
 export const CROWD_MIN_DOLLARS = 500_000;
 
+// --- Fund fallback policies (packages/engine/src/policies.ts) ---
+/** Smallest notional any policy will open, in dollars. */
+export const POLICY_MIN_TRADE_DOLLARS = 1_000;
+/** Cautious: close a position at or above this fractional gain. */
+export const POLICY_CAUTIOUS_TAKE_PROFIT = 0.08;
+/** Cautious: close a position at or below this fractional loss. */
+export const POLICY_CAUTIOUS_STOP_LOSS = 0.06;
+/** Cautious: only buys names with per-tick volatility at or below this. */
+export const POLICY_CAUTIOUS_MAX_VOLATILITY = 0.02;
+/** Cautious: a "dip" is a change from previous close at or below this. */
+export const POLICY_CAUTIOUS_DIP = -0.01;
+/** Aggressive: cover/close a position at or above this fractional gain. */
+export const POLICY_AGGRESSIVE_TAKE_PROFIT = 0.1;
+/** Aggressive: close a position at or below this fractional loss. */
+export const POLICY_AGGRESSIVE_STOP_LOSS = 0.08;
+/** Aggressive: shorts a name after an event at or below this % impact. */
+export const POLICY_AGGRESSIVE_EVENT_IMPACT = -2;
+/** Aggressive: an "overextended" name is up at least this fraction. */
+export const POLICY_AGGRESSIVE_EXTENDED = 0.03;
+/** Quant: net flow (dollars) below this magnitude is noise. */
+export const POLICY_QUANT_MIN_FLOW = 250_000;
+
 // --- Events (packages/engine/src/events.ts) ---
 /** Engine tick at which the first scripted event fires. */
 export const EVENT_FIRST_FIRE_TICK = 15;
