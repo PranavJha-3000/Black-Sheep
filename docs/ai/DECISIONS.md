@@ -1,5 +1,13 @@
 # Decisions
 
+### D-015 · 2026-11-02 · Claude Opus 5.5 (Claude Code)
+**Decision:** Stage 1 of the research-lab pivot is subtraction only. Remove what is irrelevant AND not load-bearing (human trading, browser LLM proxy, away-summary, result cards + `@vercel/og`); defer what is irrelevant but load-bearing (rooms/lobby/per-room worlds, the player Fund, the single rival, player-game UI) to the stages that replace it. `makeLLMDecision`'s endpoint becomes required so no browser path can exist.
+**Context:** `docs/VISION.md` turns the game into an autonomous AI hedge-fund laboratory where humans observe. The repo carried player-game features, and an unfinished global-world refactor had left `main`'s working tree failing the server typecheck.
+**Reasoning:** Each removal is one vertical slice and keeps typecheck, tests, lint and build green. The engine, liquidation, persistence and auth are reused by later stages (VISION §17 "preserve reusable financial infrastructure").
+**Rejected:** A big-bang rewrite to a global world plus observer API in one change — it breaks "one logical change" and leaves the tree unbuildable mid-way. Finishing the parked WIP first — it is Stage 2 work with an invalid migration, not cleanup.
+**Tradeoff accepted:** The UI is still a player-shaped terminal (now read-only) until the observer UI lands; some dead names remain (`Phase 'trading'`, `Fund.lastSeenAt`).
+**Revisit if:** Stage 2 finds a deferred component is not actually load-bearing — then delete it there.
+
 ### D-014 · 2026-10-09 · Muse Spark (Cline)
 **Decision:** All gameplay tuning constants move to a single dependency-free `config/game.ts` (design doc §11), and the pure engine (`packages/engine/src/{market,portfolio,rival,events,away}.ts`) imports them via a relative path (`../../../config/game`). Re-exports preserve old import sites (`export { INITIAL_MARGIN_RATE }`, `export { RIVAL_DECISION_TICKS }`, `export { AWAY_MIN_MS, ... }`, `export { STARTING_CAPITAL } from '../../config/game'` in derive.ts), so server/client/tests keep compiling unchanged.
 **Context:** Spec-vs-code audit found constants hardcoded across ~10 files with `STARTING_CAPITAL = 10_000_000` duplicated in server, client store, and RivalFund.tsx — drift risk and a direct §11 violation.

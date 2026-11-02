@@ -1,5 +1,5 @@
 # FEATURE-005 · Stage 1 repo cleanup (research-lab pivot)
-Status: in progress
+Status: shipped (branch `chore/stage1-cleanup`, unmerged)
 
 ## Scope
 In:
@@ -19,12 +19,12 @@ Out (deferred — irrelevant but load-bearing, replaced by later stages):
 ## Plan
 Full plan: `docs/superpowers/plans/2026-11-02-stage1-repo-cleanup.md`
 - [x] Task 0: park broken WIP, green baseline
-- [ ] Task 1: vision docs, archive design doc, rollback entry
-- [ ] Task 2: remove human trading
-- [ ] Task 3: remove browser LLM proxy
-- [ ] Task 4: remove away-summary
-- [ ] Task 5: remove result cards + `@vercel/og`
-- [ ] Task 6: verification, diff review, handover
+- [x] Task 1: vision docs, archive design doc, rollback entry
+- [x] Task 2: remove human trading
+- [x] Task 3: remove browser LLM proxy
+- [x] Task 4: remove away-summary
+- [x] Task 5: remove result cards + `@vercel/og`
+- [x] Task 6: verification, diff review, handover
 
 ## Decisions
 D-015 (Stage 1 is subtraction only; load-bearing game components deferred)
