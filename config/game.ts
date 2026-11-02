@@ -98,6 +98,9 @@ export const MAX_CONCURRENT_LLM_CALLS = 2;
 export const MAX_TOOL_ROUNDS = 4;
 /** max_tokens per model round (covers thinking at low effort + the answer). */
 export const DECISION_MAX_TOKENS = 4096;
+/** Per-request provider timeout and SDK retries: a hung call must not hold a concurrency slot for long. */
+export const LLM_TIMEOUT_MS = 90_000;
+export const LLM_MAX_RETRIES = 1;
 /** Prompt size assumed when reserving budget before a call, in tokens. */
 export const DECISION_PROMPT_TOKENS_ESTIMATE = 3000;
 

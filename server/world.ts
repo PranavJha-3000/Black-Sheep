@@ -489,7 +489,7 @@ async function persistFundState(
 
 /** Where a decision came from, recorded on its RivalDecisionLog row (D-025). */
 interface DecisionOrigin {
-  source: 'llm' | 'policy' | 'budget';
+  source: 'llm' | 'policy' | 'budget' | 'busy';
   model: string | null;
   llmCallId: number | null;
 }
@@ -536,8 +536,8 @@ async function logLlmCall(w: World, agent: Agent, loop: LoopResult): Promise<num
  * Choose who decides this cycle (VISION §12): the fund's deterministic policy
  * when there is no key or nothing material changed since the model last
  * looked; the model when its budget reservation succeeds; the policy again,
- * marked 'budget', when the fund's or the global budget (or the concurrency
- * cap) refuses. The model runs OUTSIDE the world lock.
+ * marked 'budget' when the fund's or the global budget refuses, or 'busy'
+ * when the concurrency cap is full. The model runs OUTSIDE the world lock.
  */
 async function chooseDecision(
   w: World,
@@ -555,19 +555,26 @@ async function chooseDecision(
   const { model } = agent.profile;
   const estimate = estimateCallCostUsd(model, MAX_TOOL_ROUNDS, DECISION_MAX_TOKENS, DECISION_PROMPT_TOKENS_ESTIMATE);
   const reservation = ledger.reserve(agent.fundId, agent.profile.dailyBudgetUsd, estimate, new Date());
-  if (!reservation) return policy('budget');
+  if (!reservation) return policy(ledger.atCapacity() ? 'busy' : 'budget');
 
-  agent.lastLlmInput = input;
-  const loop = await runDecisionLoop(createMessage, {
-    model,
-    effort: MODEL_REGISTRY[model].effort,
-    system: buildFundSystemPrompt(agent.profile),
-    user: buildRivalUserMessage(input),
-    maxRounds: MAX_TOOL_ROUNDS,
-    maxTokens: DECISION_MAX_TOKENS,
-    runTool: (name, args) => runFundTool(name, args, input, agent.profile),
-  });
+  let loop: LoopResult;
+  try {
+    loop = await runDecisionLoop(createMessage, {
+      model,
+      effort: MODEL_REGISTRY[model].effort,
+      system: buildFundSystemPrompt(agent.profile),
+      user: buildRivalUserMessage(input),
+      maxRounds: MAX_TOOL_ROUNDS,
+      maxTokens: DECISION_MAX_TOKENS,
+      runTool: (name, args) => runFundTool(name, args, input, agent.profile),
+    });
+  } catch (err) {
+    // A leaked reservation would hold a concurrency slot for the life of the process.
+    ledger.release(reservation);
+    throw err;
+  }
   ledger.settle(reservation, loop.costUsd, new Date());
+  agent.lastLlmInput = input;
   const llmCallId = await logLlmCall(w, agent, loop);
 
   if (!loop.decision) {

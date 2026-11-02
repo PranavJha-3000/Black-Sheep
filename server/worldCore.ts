@@ -212,7 +212,7 @@ export interface ObservedDecision {
   realizedPnL: number | null;
   tickCountAt: number | null;
   at: string;
-  /** 'llm' | 'policy' | 'budget' — where the decision came from (D-025). */
+  /** 'llm' | 'policy' | 'budget' | 'busy' — where the decision came from (D-025). */
   source: string;
   /** Model that served an 'llm' decision; null otherwise. */
   model: string | null;

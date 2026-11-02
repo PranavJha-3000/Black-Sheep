@@ -25,9 +25,9 @@ describe('costOfUsage', () => {
 });
 
 describe('estimateCallCostUsd', () => {
-  it('is the worst case: every round uses the full prompt and max_tokens', () => {
-    // 4 rounds × (3000 in × $4 + 4096 out × $20) / 1e6
-    expect(estimateCallCostUsd('claude-opus-5-5', 4, 4096, 3000)).toBeCloseTo((4 * (3000 * 4 + 4096 * 20)) / 1e6, 10);
+  it('is the worst case: round k re-sends the prompt plus every earlier full assistant turn (review I-3)', () => {
+    // input = 4×3000 + 4096×(0+1+2+3) = 36_576 tokens; output = 4×4096
+    expect(estimateCallCostUsd('claude-opus-5-5', 4, 4096, 3000)).toBeCloseTo((36_576 * 4 + 4 * 4096 * 20) / 1e6, 10);
   });
 });
 
@@ -54,6 +54,13 @@ describe('BudgetLedger', () => {
     expect(l.reserve(3, 5, 0.1, DAY1)).toBeNull();
     l.release(a);
     expect(l.reserve(3, 5, 0.1, DAY1)).not.toBeNull();
+  });
+
+  it('reports when the concurrency cap is full, so callers can label it busy rather than budget (review I-2)', () => {
+    const l = new BudgetLedger(100, 1);
+    expect(l.atCapacity()).toBe(false);
+    l.reserve(1, 5, 0.1, DAY1);
+    expect(l.atCapacity()).toBe(true);
   });
 
   it('settle replaces the estimate with the actual cost; release frees it all', () => {

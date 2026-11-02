@@ -44,7 +44,7 @@ export interface FundSummary {
   /** Provider spend today and the daily budget (null outside the registry). */
   spendUsd: number | null;
   budgetUsd: number | null;
-  /** 'llm' | 'policy' | 'budget' — who made the last decision. */
+  /** 'llm' | 'policy' | 'budget' | 'busy' — who made the last decision. */
   lastSource: string | null;
 }
 

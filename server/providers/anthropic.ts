@@ -2,6 +2,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { FUND_TOOLS, parseSubmittedDecision, SUBMIT_DECISION, type ToolResult } from '@black-sheep/engine/fundTools';
 import { parseDecisionText } from '@black-sheep/engine/rivalLLM';
 import type { RivalDecision } from '@black-sheep/engine/rival';
+import { LLM_MAX_RETRIES, LLM_TIMEOUT_MS } from '../../config/game';
 import { costOfUsage } from '../budget';
 
 /**
@@ -71,7 +72,7 @@ export interface LoopResult {
 
 /** The real SDK call. The client reads ANTHROPIC_API_KEY from the environment. */
 export function anthropicCreate(apiKey: string): CreateMessage {
-  const client = new Anthropic({ apiKey });
+  const client = new Anthropic({ apiKey, timeout: LLM_TIMEOUT_MS, maxRetries: LLM_MAX_RETRIES });
   return (params) => client.beta.messages.create(params);
 }
 
@@ -91,6 +92,15 @@ export async function runDecisionLoop(create: CreateMessage, req: DecisionReques
     outcome, decision, usage, costUsd, servedBy, stopReason, rounds, toolCalls, latencyMs: Date.now() - started, ...(error ? { error } : {}),
   });
 
+  try {
+    return await loop();
+  } catch (err) {
+    // A tool handler or an unexpected response shape threw: the caller must
+    // still get a result so it can settle the budget reservation.
+    return done('error', null, err instanceof Error ? err.message : String(err));
+  }
+
+  async function loop(): Promise<LoopResult> {
   while (rounds < req.maxRounds) {
     rounds++;
     let res: Message;
@@ -106,6 +116,7 @@ export async function runDecisionLoop(create: CreateMessage, req: DecisionReques
         fallbacks: 'default',
       });
     } catch (err) {
+      // Usage is unknown when the request itself fails, so it settles at the cost so far.
       return done('error', null, err instanceof Error ? err.message : String(err));
     }
 
@@ -151,4 +162,5 @@ export async function runDecisionLoop(create: CreateMessage, req: DecisionReques
     messages.push({ role: 'user', content: results });
   }
   return done('round_cap');
+  }
 }

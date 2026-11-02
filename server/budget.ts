@@ -41,9 +41,14 @@ export function costOfUsage(model: string, u: Usage): number {
   );
 }
 
-/** Worst-case cost of a decision: every round sends the full prompt and uses max_tokens. */
+/**
+ * Worst-case cost of a decision: every round uses max_tokens, and round k
+ * re-sends the prompt plus all k−1 earlier assistant turns (thinking included).
+ * Tool results are small JSON and are covered by the prompt estimate.
+ */
 export function estimateCallCostUsd(model: string, rounds: number, maxTokens: number, promptTokens: number): number {
-  return rounds * costOfUsage(model, { input_tokens: promptTokens, output_tokens: maxTokens });
+  const input = rounds * promptTokens + (maxTokens * rounds * (rounds - 1)) / 2;
+  return costOfUsage(model, { input_tokens: input, output_tokens: rounds * maxTokens });
 }
 
 export interface Reservation {
@@ -104,6 +109,11 @@ export class BudgetLedger {
     let held = 0;
     for (const r of this.active.values()) if (r.fundId === fundId && r.day === this.day) held += r.amountUsd;
     return (this.settled.get(fundId) ?? 0) + held;
+  }
+
+  /** True when another reservation would be refused by the concurrency cap alone. */
+  atCapacity(): boolean {
+    return this.active.size >= this.maxConcurrent;
   }
 
   inFlight(): number {

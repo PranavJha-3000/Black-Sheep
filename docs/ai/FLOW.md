@@ -33,7 +33,7 @@ Fragile: every field added to the payload is public — add to `buildWorldStateP
 Entry: `server/world.ts → decideFund(w, agent)` → `chooseDecision(w, agent, input)`
 
 1. No `ANTHROPIC_API_KEY`, or `shouldRivalReconsider(input, agent.lastLlmInput)` sees no material change → `decideByPolicy` (`source: 'policy'`).
-2. `ledger.reserve(fundId, profile.dailyBudgetUsd, estimateCallCostUsd(...), now)` — null when the fund's daily budget, the global daily budget or the concurrency cap would be breached → `decideByPolicy` (`source: 'budget'`).
+2. `ledger.reserve(fundId, profile.dailyBudgetUsd, estimateCallCostUsd(...), now)` — null when the fund's daily budget, the global daily budget or the concurrency cap would be breached → `decideByPolicy` (`source: 'budget'`, or `'busy'` when the cap is full).
 3. `agent.lastLlmInput = input`; `runDecisionLoop(createMessage, {model, effort, system: buildFundSystemPrompt(profile), user: buildRivalUserMessage(input), maxRounds: 4, maxTokens: 4096, runTool})` — `runTool` = pure `runFundTool(name, args, input, profile)`. Each round: `client.beta.messages.create` (fallback beta, `fallbacks: 'default'`); sum usage, price by `res.model`; `refusal` → stop; valid `submit_decision` → decided; no tool calls → parse text JSON or stop (`max_tokens`/`no_decision`); else echo the assistant turn, answer every tool call with a `tool_result` (`is_error` on failure); nudge before the final round; round cap → stop. SDK error → `error`. Never throws.
 4. `ledger.settle(reservation, loop.costUsd, now)`; `logLlmCall` writes `LlmCallLog` + nested `ToolCallLog` rows (never throws; returns the id or null).
 5. Decision present → `source: 'llm'`, `model: loop.servedBy`; absent → policy with the call id attached.

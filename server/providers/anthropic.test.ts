@@ -116,6 +116,19 @@ describe('runDecisionLoop', () => {
     expect(r.usage.input_tokens).toBe(1000);
   });
 
+  it('a throwing tool handler ends the loop with outcome error instead of throwing (review I-1)', async () => {
+    const create = fake(msg([toolUse('t1', 'calculate_risk', {})]));
+    const r = await runDecisionLoop(create, req({ runTool: () => { throw new Error('boom'); } }));
+    expect(r).toMatchObject({ outcome: 'error', decision: null, error: 'boom' });
+    expect(r.usage.input_tokens).toBe(1000);
+  });
+
+  it('a malformed SDK response (no usage) ends with outcome error', async () => {
+    const bad = { id: 'm', type: 'message', role: 'assistant', model: 'claude-opus-5-5', content: [], stop_reason: 'end_turn' } as never;
+    const r = await runDecisionLoop(fake(bad), req());
+    expect(r.outcome).toBe('error');
+  });
+
   it('prices each round by the model that actually served it', async () => {
     const r = await runDecisionLoop(
       fake(msg([toolUse('t2', 'submit_decision', SUBMIT)], 'tool_use', { input_tokens: 1_000_000, output_tokens: 0 }, 'claude-haiku-5-5')),
