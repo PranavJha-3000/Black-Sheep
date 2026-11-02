@@ -1,5 +1,6 @@
 /**
- * Black Sheep — server-driven Zustand store.
+ * Black Sheep — observer store: a projection of the public live world
+ * (GET /world/state). No accounts, no sessions, no lobby.
  */
 import { create } from 'zustand';
 import { createFund } from '@black-sheep/engine/portfolio';
@@ -10,25 +11,13 @@ import type { RivalFund } from '@black-sheep/engine/rival';
 import { apiFetch } from './api';
 import { projectState } from './stateMapper';
 import type { ProjectionPrev } from './stateMapper';
+import type { WorldStatePayload } from '../../server/worldCore';
 import { STARTING_CAPITAL } from '../../config/game';
 
-export type Phase = 'auth' | 'lobby' | 'trading';
-
-export interface GameSession {
-  token: string;
-  user: { id: number; email: string };
-  roomCode: string;
-}
-
 export interface GameStoreState {
-  phase: Phase;
-  token: string;
-  user: { id: number; email: string } | null;
-  roomCode: string;
-  error: string;
-  /** The caller's fund DB id (from /state me.fundId). Null before first poll. */
+  /** The focus fund's DB id (lowest id in the world). Null before a fund exists. */
   fundId: number | null;
-  /** The caller's fund display name (from /state me.name). */
+  /** The focus fund's display name. */
   name: string;
   companies: Record<Ticker, Company>;
   tickCount: number;
@@ -51,7 +40,6 @@ export interface GameStoreState {
   cashPct: number;
   peakNav: number;
   rivalFund: RivalFund;
-  rivalNav: number;
   rivalThinking: boolean;
   events: MarketEvent[];
   flow: Record<Ticker, number>;
@@ -62,17 +50,8 @@ export interface GameStoreState {
   priceHistory: Record<Ticker, number[]>;
   navHistory: number[];
   selectedTicker: Ticker;
-  // --- session / room actions ---
-  login: (email: string, password: string) => Promise<void>;
-  logout: () => void;
-  register: (email: string, password: string) => Promise<void>;
-  clearError: () => void;
-  createRoom: () => Promise<void>;
-  joinRoom: (code: string) => Promise<void>;
-  enterRoom: (roomCode: string) => void;
-  leaveRoom: () => void;
-  restart: () => void;
-  setError: (error: string) => void;
+  /** Reset the projection to the seed state (before the first poll). */
+  reset: () => void;
   // --- UI actions ---
   selectTicker: (ticker: Ticker) => void;
   // --- poll ---
@@ -82,32 +61,6 @@ export interface GameStoreState {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-const STORAGE_KEY = 'black_sheep_session';
-
-function loadSession(): GameSession | null {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as Partial<GameSession>;
-    if (!parsed.token || !parsed.user || !parsed.roomCode) return null;
-    return {
-      token: parsed.token,
-      user: parsed.user,
-      roomCode: parsed.roomCode,
-    };
-  } catch {
-    return null;
-  }
-}
-
-function saveSession(session: GameSession): void {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(session));
-}
-
-function clearSession(): void {
-  localStorage.removeItem(STORAGE_KEY);
-}
 
 function seedMarket(): Record<Ticker, Company> {
   return {
@@ -126,127 +79,57 @@ const SEED_FUND = createFund(STARTING_CAPITAL, 0);
 // Store
 // ---------------------------------------------------------------------------
 
-const _initSession = loadSession();
-const _initPhase: Phase = _initSession ? 'lobby' : 'auth';
-const _initCompanies = seedMarket();
-const _initFund = SEED_FUND;
+type SeedState = Omit<GameStoreState, 'reset' | 'selectTicker' | 'poll' | 'selectedTicker'>;
+
+function seedState(): SeedState {
+  return {
+    fundId: null,
+    name: '',
+    companies: seedMarket(),
+    tickCount: 0,
+    timestamp: 0,
+    fund: SEED_FUND,
+    nav: STARTING_CAPITAL,
+    cash: STARTING_CAPITAL,
+    availCash: STARTING_CAPITAL,
+    unrealizedPnL: 0,
+    dailyPnl: 0,
+    dailyPnlPct: 0,
+    grossExposure: 0,
+    netExposure: 0,
+    leverage: 0,
+    marginUsedPercent: 0,
+    atRisk: false,
+    riskPct: 0,
+    riskLabel: 'LOW',
+    liquidationAt: 0,
+    cashPct: 100,
+    peakNav: STARTING_CAPITAL,
+    rivalFund: { ...SEED_FUND, personality: 'contrarian' as const, lastDecision: null },
+    rivalThinking: false,
+    events: [],
+    flow: {},
+    rivalDecisionKey: '',
+    liquidated: false,
+    liquidationCause: null,
+    priceHistory: {},
+    navHistory: [],
+  };
+}
 
 export const useGameStore = create<GameStoreState>((set, get) => ({
-  phase: _initPhase,
-  token: _initSession ? _initSession.token : '',
-  user: _initSession ? _initSession.user : null,
-  roomCode: _initSession ? _initSession.roomCode : '',
-  error: '',
-  fundId: null,
-  name: '',
-  companies: _initCompanies as Record<Ticker, Company>,
-  tickCount: 0,
-  timestamp: 0,
-  fund: _initFund,
-  nav: STARTING_CAPITAL,
-  cash: STARTING_CAPITAL,
-  availCash: STARTING_CAPITAL,
-  unrealizedPnL: 0,
-  dailyPnl: 0,
-  dailyPnlPct: 0,
-  grossExposure: 0,
-  netExposure: 0,
-  leverage: 0,
-  marginUsedPercent: 0,
-  atRisk: false,
-  riskPct: 0,
-  riskLabel: 'LOW',
-  liquidationAt: 0,
-  cashPct: 100,
-  peakNav: STARTING_CAPITAL,
-  rivalFund: { ...SEED_FUND, personality: 'contrarian' as const, lastDecision: null },
-  rivalNav: STARTING_CAPITAL,
-  rivalThinking: false,
-  events: [],
-  flow: {},
-  rivalDecisionKey: '',
-  liquidated: false,
-  liquidationCause: null,
-  priceHistory: {},
-  navHistory: [],
+  ...seedState(),
   selectedTicker: 'NOVA' as Ticker,
   // ---------------------------------------------------------------------------
   // Actions
   // ---------------------------------------------------------------------------
 
-  login: async (email: string, password: string) => {
-    const data = await apiFetch<{ token: string; user: { id: number; email: string } }>('/auth/login', {
-      method: 'POST',
-      body: { email: email.trim(), password },
-    });
-    const session: GameSession = { token: data.token, user: data.user, roomCode: '' };
-    saveSession(session);
-    set({ phase: 'lobby', token: data.token, user: data.user, roomCode: '', error: '' });
-  },
-  register: async (email: string, password: string) => {
-    const data = await apiFetch<{ token: string; user: { id: number; email: string } }>('/auth/register', {
-      method: 'POST',
-      body: { email: email.trim(), password },
-    });
-    const session: GameSession = { token: data.token, user: data.user, roomCode: '' };
-    saveSession(session);
-    set({ phase: 'lobby', token: data.token, user: data.user, roomCode: '', error: '' });
-  },
-  createRoom: async () => {
-    const { token } = get();
-    const data = await apiFetch<{ code: string }>('/rooms', { method: 'POST', token });
-    get().enterRoom(data.code);
-  },
-  joinRoom: async (code: string) => {
-    const { token } = get();
-    await apiFetch(`/rooms/${code}/join`, { method: 'POST', token });
-    get().enterRoom(code);
-  },
-  logout: () => {
-    clearSession();
-    set({
-      phase: 'auth',
-      token: '',
-      user: null,
-      roomCode: '',
-      error: '',
-      fund: SEED_FUND,
-      liquidated: false,
-    });
-  },
-  enterRoom: (roomCode: string) => {
-    set({ phase: 'trading', roomCode, error: '' });
-  },
-  leaveRoom: () => {
-    set({ phase: 'lobby', roomCode: '', liquidated: false });
-  },
-  restart: () => {
-    clearSession();
-    set({
-      phase: 'auth',
-      token: '',
-      user: null,
-      roomCode: '',
-      error: '',
-      companies: seedMarket(),
-      fund: SEED_FUND,
-      liquidated: false,
-      priceHistory: {},
-      navHistory: [],
-    });
-  },
-  setError: (error: string) => set({ error }),
-  clearError: () => set({ error: '' }),
+  reset: () => set(seedState()),
   selectTicker: (ticker: Ticker) => set({ selectedTicker: ticker }),
   poll: async () => {
     try {
-      const { phase, token, roomCode, priceHistory, navHistory, rivalDecisionKey } = get();
-      if (phase !== 'trading' || !token || !roomCode) return;
-
-      const raw = await apiFetch<Parameters<typeof projectState>[0]>(
-        `/rooms/${roomCode}/state`,
-        { token },
-      );
+      const { priceHistory, navHistory, rivalDecisionKey } = get();
+      const raw = await apiFetch<WorldStatePayload>('/world/state');
 
       const prev: ProjectionPrev = {
         priceHistory,
@@ -281,7 +164,6 @@ export const useGameStore = create<GameStoreState>((set, get) => ({
         liquidationCause: p.liquidationCause,
         priceHistory: p.priceHistory,
         navHistory: p.navHistory,
-        rivalNav: p.rivalNav,
         rivalFund: p.rivalFund,
         rivalThinking: p.rivalThinking,
         events: p.events,

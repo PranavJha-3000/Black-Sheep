@@ -1,80 +1,25 @@
 ﻿import type { RivalAction, RivalFund, RivalLastDecision } from '@black-sheep/engine/rival';
 import { peakNav } from '@black-sheep/engine/portfolio';
 import type { Fund } from '@black-sheep/engine/portfolio';
-import type { Company, Direction, MarketEvent, MarketEventType, Position, Ticker } from '@black-sheep/engine/types';
-import { derive } from './derive';
+import type { Company, MarketEvent, MarketEventType, Position, Ticker } from '@black-sheep/engine/types';
+import type { WorldStatePayload } from '../../server/worldCore';
+import { derive, STARTING_CAPITAL } from './derive';
 import type { RiskLabel } from './derive';
 
 /**
- * stateMapper — the pure bridge from the wire (/rooms/:code/state) to the
- * store shape every Phase-2 component already reads.
+ * stateMapper — the pure bridge from the wire (GET /world/state) to the
+ * store shape every terminal component reads.
  *
  * The mapper is the separator between "what the server sends" and "what the
  * terminal renders". It exists so the whole multiplexer is unit-testable
  * without a network: feed it a state JSON and a snapshot of the previous
- * projection, get back the patches. The rival's last decision is re-derived
- * from its persisted decision telemetry (the information firewall stays
- * intact: we never learn the rival's actual book).
+ * projection, get back the patches. Observation is public (D-017): humans see
+ * every fund's book; agent isolation lives server-side in buildDecisionInput.
  */
 
-// ---------------------------------------------------------------------------
-// Wire types (mirror of the /state response in server/rooms.ts)
-// ---------------------------------------------------------------------------
-
-export interface ApiPosition {
-  id: string;
-  ticker: Ticker;
-  direction: Direction;
-  quantity: number;
-  entryPrice: number;
-  entryTimestamp: number;
-  marginReserved: number;
-  price: number;
-  pnl: number;
-}
-
-export interface ApiRivalDecision {
-  action: string;
-  ticker: Ticker | null;
-  reasoning: string;
-  confidence: number | null;
-  fillPrice: number | null;
-  realizedPnL: number | null;
-  tickCountAt: number | null;
-  at: string;
-}
-
-export interface ApiRoomState {
-  room: { code: string; status: string; maxPlayers: number; tickCount: number };
-  market: { timestamp: number; companies: Record<string, Company> };
-  funds: Array<{ id: number; name: string; userId: number | null; nav: number; netExposure: number }>;
-  me: {
-    fundId: number;
-    name: string;
-    cash: number;
-    availCash: number;
-    nav: number;
-    startingCapital: number;
-    positions: ApiPosition[];
-    liquidated: boolean;
-    liquidationCause: string | null;
-  };
-  flow: Record<string, number>;
-  rival: {
-    name: string;
-    thinking: boolean;
-    lastDecision: ApiRivalDecision | null;
-  };
-  recentEvents: Array<{
-    id: number;
-    type: string;
-    ticker: Ticker | null;
-    headline: string;
-    priceImpactPercent: number;
-    tickCountAt: number | null;
-    at: string;
-  }>;
-}
+// The wire type is WorldStatePayload, imported type-only from the server so
+// the contract cannot drift. The terminal focuses one fund: the lowest id
+// (funds arrive sorted by id). An empty world projects a seed fund.
 
 /** What the previous projection contributed that we accumulate across polls. */
 export interface ProjectionPrev {
@@ -85,7 +30,7 @@ export interface ProjectionPrev {
 
 /** The full set of store fields a poll writes. */
 export interface Projection {
-  fundId: number;
+  fundId: number | null;
   name: string;
   companies: Record<Ticker, Company>;
   tickCount: number;
@@ -111,7 +56,6 @@ export interface Projection {
   liquidationCause: string | null;
   priceHistory: Record<Ticker, number[]>;
   navHistory: number[];
-  rivalNav: number;
   rivalFund: RivalFund;
   rivalThinking: boolean;
   events: MarketEvent[];
@@ -125,15 +69,16 @@ function isMarketEventType(t: string): MarketEventType {
   return t === 'earnings' || t === 'macro' || t === 'sector' || t === 'company' ? t : 'company';
 }
 
-export function projectState(raw: ApiRoomState, prev: ProjectionPrev): Projection {
+export function projectState(raw: WorldStatePayload, prev: ProjectionPrev): Projection {
   const companies = raw.market.companies as Record<Ticker, Company>;
+  const focus = raw.funds[0] ?? null;
 
-  // --- own fund -------------------------------------------------------------
+  // --- focus fund (seed fund while the world has none) ----------------------
   const fundBase: Fund = {
-    cash: raw.me.cash,
-    startingCapital: raw.me.startingCapital,
+    cash: focus?.cash ?? STARTING_CAPITAL,
+    startingCapital: focus?.startingCapital ?? STARTING_CAPITAL,
     realizedPnL: 0,
-    positions: raw.me.positions.map(
+    positions: (focus?.positions ?? []).map(
       (p): Position => ({
         id: p.id,
         ticker: p.ticker,
@@ -151,7 +96,7 @@ export function projectState(raw: ApiRoomState, prev: ProjectionPrev): Projectio
   const navHistory = [...prev.navHistory, d.nav].slice(-HISTORY_CAP);
   const fund: Fund = {
     ...fundBase,
-    history: [...fundBase.history, { timestamp: raw.market.timestamp, nav: d.nav }],
+    history: [...fundBase.history, { timestamp: raw.world.timestamp, nav: d.nav }],
   };
 
   // --- price + fund history trails for charts ------------------------------
@@ -160,18 +105,15 @@ export function projectState(raw: ApiRoomState, prev: ProjectionPrev): Projectio
     priceHistory[t] = [...(prev.priceHistory[t] ?? []), companies[t].price].slice(-HISTORY_CAP);
   }
 
-// --- rival (display projection only — the real book stays on the server) ---
-  const rivalRow = raw.funds.find((f) => f.userId === null);
-  const rivalNav = Math.max(1, rivalRow?.nav ?? raw.me.startingCapital);
-
+  // --- the focus fund's last decision (its "intel" line) ---------------------
   let lastDecision: RivalLastDecision | null = null;
   let rivalDecisionKey = prev.rivalDecisionKey;
-  const rawDecision = raw.rival.lastDecision;
+  const rawDecision = focus?.lastDecision ?? null;
 
   if (rawDecision) {
     lastDecision = {
       action: rawDecision.action as RivalAction,
-      ticker: rawDecision.ticker ?? undefined,
+      ticker: (rawDecision.ticker ?? undefined) as Ticker | undefined,
       reasoning: rawDecision.reasoning,
       confidence: Number.isFinite(rawDecision.confidence ?? Number.NaN)
         ? Math.min(0.95, Math.max(0, rawDecision.confidence ?? 0.7))
@@ -184,13 +126,12 @@ export function projectState(raw: ApiRoomState, prev: ProjectionPrev): Projectio
   }
 
   const rivalFund: RivalFund = {
-    // Only `lastDecision` holds real data; the numeric fields are inert
-    // fillers. The firewall protects the rival's actual book, so we never
-    // know its cash/positions — and no component reads them.
+    // Only `lastDecision` holds real data; the book itself is projected as
+    // `fund` above, so these numeric fields are inert and no component reads them.
     cash: 0,
     positions: [],
     realizedPnL: 0,
-    startingCapital: raw.me.startingCapital,
+    startingCapital: fundBase.startingCapital,
     history: [],
     personality: 'contrarian',
     lastDecision,
@@ -208,11 +149,11 @@ export function projectState(raw: ApiRoomState, prev: ProjectionPrev): Projectio
   }));
 
   return {
-    fundId: raw.me.fundId,
-    name: raw.me.name,
+    fundId: focus?.id ?? null,
+    name: focus?.name ?? '',
     companies,
-    tickCount: raw.room.tickCount,
-    timestamp: raw.market.timestamp,
+    tickCount: raw.world.tickCount,
+    timestamp: raw.world.timestamp,
     fund,
     nav: d.nav,
     cash: d.cash,
@@ -230,13 +171,12 @@ export function projectState(raw: ApiRoomState, prev: ProjectionPrev): Projectio
     cashPct: d.cashPct,
     liquidationAt: d.liquidationAt,
     peakNav: peakNav(fund),
-    liquidated: raw.me.liquidated,
-    liquidationCause: raw.me.liquidationCause,
+    liquidated: focus?.liquidated ?? false,
+    liquidationCause: focus?.liquidationCause ?? null,
     priceHistory,
     navHistory,
-    rivalNav,
     rivalFund,
-    rivalThinking: raw.rival.thinking ?? false,
+    rivalThinking: focus?.thinking ?? false,
     events,
     flow: raw.flow ?? {},
     rivalDecisionKey,

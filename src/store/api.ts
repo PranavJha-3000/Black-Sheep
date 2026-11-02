@@ -20,11 +20,6 @@ export class ApiError extends Error {
   }
 }
 
-export interface SessionPayload {
-  token: string;
-  user: { id: number; email: string };
-}
-
 export async function apiFetch<T = unknown>(
   path: string,
   options: { method?: 'GET' | 'POST'; body?: unknown; token?: string } = {},
