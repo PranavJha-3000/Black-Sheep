@@ -92,6 +92,22 @@ describe('stateMapper (poll → terminal projection)', () => {
     expect(p.liquidationCause).toBe('Excessive leverage');
   });
 
+  it('summarises every fund for the funds strip, in id order', () => {
+    const p = projectState(
+      payload([
+        fund(7, { name: 'CROWN MERIDIAN', thinking: true }),
+        fund(2, { name: 'STERLING & VALE', cash: 11_000_000 }),
+        fund(4, { name: 'APEX CAPITAL', liquidated: true }),
+      ]),
+      seededPrev(),
+    );
+    expect(p.funds.map((f) => f.id)).toEqual([2, 4, 7]);
+    expect(p.funds[0]).toMatchObject({ name: 'STERLING & VALE', personality: 'cautious', model: 'claude-opus-5-5' });
+    expect(p.funds[0].pnlPct).toBeCloseTo(10, 6);
+    expect(p.funds[1]).toMatchObject({ personality: null, model: null, liquidated: true });
+    expect(p.funds[2].thinking).toBe(true);
+  });
+
   it('focuses the lowest-id fund and maps its last decision', () => {
     const decision = {
       action: 'short',

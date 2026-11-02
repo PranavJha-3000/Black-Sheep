@@ -8,6 +8,7 @@ import Foot from "./Foot";
 import ExposureWarning from "./ExposureWarning";
 import RivalPanel from "./RivalPanel";
 import FundSummaryPanel from "./FundSummaryPanel";
+import FundsStrip from "./FundsStrip";
 import { useGameStore } from "../store/gameStore";
 export default function Terminal() {
   useEffect(() => {
@@ -39,6 +40,7 @@ export default function Terminal() {
         <TopBar />
         <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-2">
           <Ticker />
+          <FundsStrip />
           <ExposureWarning />
           <Hero />
           <Mid />

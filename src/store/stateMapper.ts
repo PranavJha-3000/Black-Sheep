@@ -28,6 +28,21 @@ export interface ProjectionPrev {
   rivalDecisionKey: string;
 }
 
+/** One fund's line in the funds strip: every fund in the world, at a glance. */
+export interface FundSummary {
+  id: number;
+  name: string;
+  nav: number;
+  /** NAV vs starting capital, in percent. */
+  pnlPct: number;
+  liquidated: boolean;
+  thinking: boolean;
+  /** Null for a fund outside the registry. */
+  personality: string | null;
+  model: string | null;
+  lastAction: string | null;
+}
+
 /** The full set of store fields a poll writes. */
 export interface Projection {
   fundId: number | null;
@@ -61,6 +76,7 @@ export interface Projection {
   events: MarketEvent[];
   flow: Record<string, number>;
   rivalDecisionKey: string;
+  funds: FundSummary[];
 }
 
 const HISTORY_CAP = 180;
@@ -180,5 +196,16 @@ export function projectState(raw: WorldStatePayload, prev: ProjectionPrev): Proj
     events,
     flow: raw.flow ?? {},
     rivalDecisionKey,
+    funds: raw.funds.map((f) => ({
+      id: f.id,
+      name: f.name,
+      nav: f.nav,
+      pnlPct: f.startingCapital > 0 ? ((f.nav - f.startingCapital) / f.startingCapital) * 100 : 0,
+      liquidated: f.liquidated,
+      thinking: f.thinking,
+      personality: f.profile?.personality ?? null,
+      model: f.profile?.model ?? null,
+      lastAction: f.lastDecision ? `${f.lastDecision.action.toUpperCase()}${f.lastDecision.ticker ? ' ' + f.lastDecision.ticker : ''}` : null,
+    })),
   };
 }
