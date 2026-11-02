@@ -1,5 +1,37 @@
 # Decisions
 
+### D-019 · 2026-11-02 · Claude Opus 5.5 (Claude Code)
+**Decision:** Every fund, AI included, is subject to server-authoritative liquidation (`liquidateFunds` in `server/world.ts`). A liquidated fund stays visible to observers but never decides again (`shouldFundDecide` gates on `liquidated`, and `decideRival` drops a decision that resolves after its fund died). `LiquidationLog.rivalContext` is written as `null`.
+**Context:** Before Stage 2 only human funds could be liquidated, and `computeRivalContext` narrated the death relative to the rival. With no humans, that left the only funds in the world immortal.
+**Reasoning:** A research lab about fund survival needs funds that can fail (VISION: survival and drawdown are measured outcomes). Keeping the dead fund visible preserves the record observers came to see.
+**Rejected:** Removing liquidated funds from the world (loses the record); restarting them with fresh capital (silently resets an experiment); keeping a rival-context narrative (the player-vs-rival story is gone).
+**Tradeoff accepted:** The `rivalContext` column is kept but always null — a dead column until a schema pass drops it.
+**Revisit if:** Stage 3 adds fund relationship memory (reuse the column for "who crowded whom") or experiments need fund revival rules.
+
+### D-018 · 2026-11-02 · Claude Opus 5.5 (Claude Code)
+**Decision:** The world seed is resolved once and persisted on `World.seed`. On first boot it is `WORLD_SEED` env when that is a decimal integer in `[0, 2147483647]`, else `config/game.ts` `WORLD_SEED` (20261102). Afterwards the persisted row always wins; a different env value only logs a warning. A corrupt latest snapshot throws instead of starting a fresh market.
+**Context:** Each room used to derive its RNG seed from `room.id`. One persistent world needs a seed that survives restarts and is reproducible (VISION §10).
+**Reasoning:** Persisting the seed makes a restart resume the same world. Treating env as first-boot-only stops a stray deploy variable from silently forking an observed world. Failing loudly on corruption protects the history observers have watched.
+**Rejected:** Reading the seed from env on every boot (a config change would reseed a live world); auto-recovering from a corrupt snapshot with a fresh market (silent data loss).
+**Tradeoff accepted:** Changing the live world's seed requires a DB edit or a new world row; a corrupt snapshot stops the clock until fixed by hand.
+**Revisit if:** Experiment mode (separate seeded worlds) arrives — each world row already carries its own seed.
+
+### D-017 · 2026-11-02 · Claude Opus 5.5 (Claude Code)
+**Decision:** Observation is public. `GET /world/state` needs no account and shows every fund's book (cash, positions, exposure, last decision, liquidation cause). Agent isolation lives where agents read — `buildDecisionInput` — not in the HTTP API. The client imports the payload type (`WorldStatePayload`) type-only from `server/worldCore.ts`.
+**Context:** The old `/rooms/:code/state` hid other funds' books from the caller because the caller was a competing player. Now the caller is a human observer and competes with no one.
+**Reasoning:** Observers need the whole picture (VISION §13). Agents never call the HTTP API, so their firewall is unaffected. Sharing the type removes a hand-maintained mirror that could drift.
+**Rejected:** Keeping JWT auth on observation (no account exists to protect anything); a per-fund firewall in the API (protects nobody now).
+**Tradeoff accepted:** Anyone who can reach the server can read the full world state. `server/auth.ts` stays mounted but unused by the client.
+**Revisit if:** Private experiments or paid access appear, or an agent is ever given HTTP access (then it must get a filtered view).
+
+### D-016 · 2026-11-02 · Claude Opus 5.5 (Claude Code)
+**Decision:** `World` replaces `Room`. Every table keeps a `worldId` foreign key, and the server runs one persistent world named `live`, loaded by `ensureLiveWorld()` and written by one module-level `withWorldLock` chain. Rooms, lobby, join, auth screens and per-room worlds are removed. The init migration (`prisma/migrations/20261102000000_init`) is generated offline from the schema.
+**Context:** VISION describes one shared financial world that runs whether or not anyone watches. The parked `wip/stage2-global-world` branch dropped the FK for a singleton `id = 1`, deleted the tick loop and had invalid migration SQL.
+**Reasoning:** Keeping `worldId` costs nothing now and lets separate experiment worlds arrive later without a second schema migration. The parked branch was used only as a reference.
+**Rejected:** A singleton world without an FK (forces another migration for experiment mode); finishing the parked branch (broken loop, invalid SQL).
+**Tradeoff accepted:** Exactly one in-process writer — running two server processes against one DB would double-tick the world.
+**Revisit if:** The server must scale out (add Postgres advisory-lock leader election) or experiment mode needs several concurrent worlds.
+
 ### D-015 · 2026-11-02 · Claude Opus 5.5 (Claude Code)
 **Decision:** Stage 1 of the research-lab pivot is subtraction only. Remove what is irrelevant AND not load-bearing (human trading, browser LLM proxy, away-summary, result cards + `@vercel/og`); defer what is irrelevant but load-bearing (rooms/lobby/per-room worlds, the player Fund, the single rival, player-game UI) to the stages that replace it. `makeLLMDecision`'s endpoint becomes required so no browser path can exist.
 **Context:** `docs/VISION.md` turns the game into an autonomous AI hedge-fund laboratory where humans observe. The repo carried player-game features, and an unfinished global-world refactor had left `main`'s working tree failing the server typecheck.

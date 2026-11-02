@@ -1,8 +1,8 @@
 import 'dotenv/config';
 import express from 'express';
 import { authRouter } from './auth';
-import { roomsRouter } from './rooms';
 import { startWorldLoop } from './world';
+import { worldRouter } from './worldRoutes';
 
 const app = express();
 app.use(express.json());
@@ -26,7 +26,7 @@ app.get('/health', (_req, res) => {
 });
 
 app.use('/auth', authRouter);
-app.use('/rooms', roomsRouter);
+app.use('/world', worldRouter);
 
 // Express error handler (next-param signature is how Express detects it).
 app.use((err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {

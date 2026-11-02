@@ -11,6 +11,7 @@ export default function FundSummaryPanel() {
   const startingCapital = useGameStore((s) => s.fund.startingCapital);
   const positions = useGameStore((s) => s.fund.positions);
   const liquidated = useGameStore((s) => s.liquidated);
+  const liquidationCause = useGameStore((s) => s.liquidationCause);
 
   const pnl = nav - startingCapital;
   const pnlPct = startingCapital > 0 ? (pnl / startingCapital) * 100 : 0;
@@ -22,6 +23,11 @@ export default function FundSummaryPanel() {
         {liquidated ? "Final Results" : "Fund Summary"}
       </div>
       <div className="mt-1 text-sm font-bold">{name}</div>
+      {liquidated && (
+        <div className="mt-1 text-[10px] font-bold tracking-wider text-terminal-red">
+          LIQUIDATED — {liquidationCause ?? "UNKNOWN"}
+        </div>
+      )}
       <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
         <div className="text-terminal-dim">NAV</div>
         <div className="text-right font-bold">{fmtMoney(nav)}</div>

@@ -1,7 +1,6 @@
 import { useGameStore } from '../store/gameStore';
 import { fmtMoney, fmtSigned, fmtPct, cx } from './fmt';
 import RiskGauge from './RiskGauge';
-import RivalFund from './RivalFund';
 export default function Hero() {
   const nav = useGameStore((s) => s.nav);
   const dailyPnl = useGameStore((s) => s.dailyPnl);
@@ -22,8 +21,7 @@ export default function Hero() {
           <span className="text-terminal-dim">Leverage</span><span className="col-span-2 text-right">{lev.toFixed(2)}x</span>
         </div>
       </div>
-      <div className="col-span-5"><RiskGauge /></div>
-      <div className="col-span-3"><RivalFund /></div>
+      <div className="col-span-8"><RiskGauge /></div>
     </div>
   );
 }

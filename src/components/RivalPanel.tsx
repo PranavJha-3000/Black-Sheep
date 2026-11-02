@@ -1,19 +1,18 @@
 import { useEffect, useState } from 'react';
 import { useGameStore } from '../store/gameStore';
-import { RIVAL_NAME } from '@black-sheep/engine/rival';
 import { STARTING_CAPITAL } from '../store/derive';
 import { fmtMoney, fmtPct, cx } from './fmt';
 
 /**
- * RivalPanel - the "intelligence feed" for the rival fund.
+ * RivalPanel - the "intelligence feed" for the focus fund.
  *
- * Shows the rival's real NAV (mark-to-market of its actual book) and, most
- * importantly, the reasoning behind its last decision. While an LLM call is in
+ * Shows the fund's NAV (mark-to-market of its book) and, most importantly, the reasoning behind its last decision. While an LLM call is in
  * flight we show a terminal-style "thinking" line with animating dots so the
  * pause reads as intentional, not as lag.
  */
 export default function RivalPanel() {
-  const rivalNav = useGameStore((s) => s.rivalNav);
+  const nav = useGameStore((s) => s.nav);
+  const name = useGameStore((s) => s.name);
   const thinking = useGameStore((s) => s.rivalThinking);
   const lastDecision = useGameStore((s) => s.rivalFund?.lastDecision);
 
@@ -25,10 +24,10 @@ export default function RivalPanel() {
     return () => clearInterval(id);
   }, [thinking]);
 
-  const rPct = ((rivalNav - STARTING_CAPITAL) / STARTING_CAPITAL) * 100;
+  const rPct = ((nav - STARTING_CAPITAL) / STARTING_CAPITAL) * 100;
 
   const reasoning = thinking
-    ? `${RIVAL_NAME} is reviewing positions${'.'.repeat(dots)}`
+    ? `${name} is reviewing positions${'.'.repeat(dots)}`
     : lastDecision
       ? lastDecision.reasoning
       : 'Awaiting first market read...';
@@ -36,7 +35,7 @@ export default function RivalPanel() {
   return (
     <div className="flex h-full flex-col rounded border border-terminal-border bg-terminal-panel p-3">
       <div className="flex items-center justify-between">
-        <span className="text-[11px] tracking-widest text-terminal-dim">RIVAL INTEL</span>
+        <span className="text-[11px] tracking-widest text-terminal-dim">FUND INTEL</span>
         <span className={cx('text-[10px] tracking-widest', thinking ? 'text-terminal-green' : 'text-terminal-dim')}>
           {thinking ? 'THINKING' : 'LIVE'}
         </span>
@@ -47,8 +46,8 @@ export default function RivalPanel() {
           ∧
         </div>
         <div className="flex-1">
-          <div className="text-[11px] tracking-widest text-terminal-dim">{RIVAL_NAME}</div>
-          <div className="text-lg font-bold text-terminal-text">{fmtMoney(rivalNav)}</div>
+          <div className="text-[11px] tracking-widest text-terminal-dim">{name || 'NO FUND YET'}</div>
+          <div className="text-lg font-bold text-terminal-text">{fmtMoney(nav)}</div>
           <div className={cx('text-[11px]', rPct >= 0 ? 'text-terminal-green' : 'text-terminal-red')}>
             {fmtPct(rPct)}
           </div>

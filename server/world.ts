@@ -9,7 +9,6 @@ import { generateEvent, initialScheduler, maybeFireScriptedEvent, type Scheduler
 import {
   checkLiquidation,
   deriveCauseOfDeath,
-  INITIAL_MARGIN_RATE,
   liquidateFund,
   markToMarket,
   peakNav,
@@ -17,136 +16,88 @@ import {
 import {
   applyRivalDecision,
   buildDecisionInput,
-  detectConfrontation,
   makeRandomDecision,
-  RIVAL_DECISION_TICKS,
   RIVAL_NAME,
   type RivalDecision,
   type RivalFund,
-  type RivalLastDecision,
 } from '@black-sheep/engine/rival';
 import { makeLLMDecision } from '@black-sheep/engine/rivalLLM';
-import type {
-  Direction,
-  MarketEvent,
-  MarketState,
-  Position,
-  Ticker,
-} from '@black-sheep/engine/types';
+import type { MarketEvent, MarketState, Ticker } from '@black-sheep/engine/types';
 import { prisma } from './db';
-import { EVENT_BUFFER, SNAPSHOT_EVERY_TICKS, STARTING_CAPITAL, TICK_INTERVAL_MS } from '../config/game';
+import {
+  enginePositionFromRow,
+  engineFundFromRows,
+  parseWorldSnapshot,
+  positionKey,
+  realizedOfClosed,
+  resolveWorldSeed,
+  shouldFundDecide,
+  singleFlight,
+} from './worldCore';
+import {
+  EVENT_BUFFER,
+  LIVE_WORLD_NAME,
+  SNAPSHOT_EVERY_TICKS,
+  STARTING_CAPITAL,
+  TICK_INTERVAL_MS,
+  WORLD_SEED,
+} from '../config/game';
 
 /**
- * The persistent game world.
+ * The persistent live world.
  *
- * One in-memory World per active room. The market and the rival fund live
- * HERE now (not in a browser), so the world keeps ticking while nobody is
- * connected. The engine is the shared package — the server only orchestrates:
- * tick → persist periodic snapshot → rival decides → persist deltas.
+ * One in-memory World — the single seeded world named LIVE_WORLD_NAME (D-016).
+ * The market and every AI fund live HERE, so the world keeps ticking while
+ * nobody is watching. Humans only observe it through GET /world/state. The
+ * engine is the shared package — the server only orchestrates:
+ * tick → persist periodic snapshot → funds decide → persist deltas.
  */
 
-// Starting capital, tick interval, snapshot cadence, and the event buffer come
-// from config/game.ts (design doc §11) — no engine-logic tuning constants live here.
-const RNG_SEED_SALT = 0x9e3779b9;
+// Starting capital, tick interval, snapshot cadence, the event buffer and the
+// default seed come from config/game.ts — no engine-logic tuning constants live here.
 
 const ANTHROPIC_URL = 'https://api.anthropic.com/v1/messages';
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY ?? '';
 
 interface World {
-  roomId: number;
+  worldId: number;
+  name: string;
+  /** Persisted at creation; a restart resumes the same RNG stream (D-018). */
+  seed: number;
   market: MarketState;
   scheduler: SchedulerState;
   events: MarketEvent[];
   rivalFundId: number;
   rivalFund: RivalFund;
-  /** One in-flight rival LLM decision at a time (same guard as the client). */
+  /** One in-flight LLM decision at a time. */
   rivalPending: boolean;
-  rngSeed: number;
+  /** A liquidated fund stays visible but never decides again (D-019). */
+  rivalLiquidated: boolean;
 }
 
-const worlds = new Map<number, World>();
+let live: World | undefined;
 
-/** Accessor for other server modules that need the live market (peak NAV tracking). */
-export function getWorld(roomId: number): World | undefined {
-  return worlds.get(roomId);
+/** The loaded live world, or undefined before the first successful ensureLiveWorld(). */
+export function getLiveWorld(): World | undefined {
+  return live;
 }
 
 /**
- * Per-room serialization for anything that mutates a world's in-memory market
- * and mirrors it to Postgres (tick, player trade, rival decision mutation).
+ * Serialization for anything that mutates the world's in-memory market and
+ * mirrors it to Postgres (tick, fund decision mutation).
  *
- * The world clock only ticks a room once per interval, but HTTP trade handlers
- * and rival LLM resolutions run concurrently with it. Without this lock a
- * player trade could apply price impact, then be silently clobbered by an
- * interleaved tick (losing the move for every observer) — or two writers
- * could double-spend cash. Waiting on the previous op's settlement (even on
- * failure, via then(fn, fn)) makes each room effectively single-writer.
+ * The world clock ticks once per interval, but LLM decisions resolve
+ * concurrently with it. Without this lock a decision could apply price impact,
+ * then be silently clobbered by an interleaved tick. Waiting on the previous
+ * op's settlement (even on failure, via then(fn, fn)) makes the world
+ * single-writer.
  */
-const roomLocks = new Map<number, Promise<unknown>>();
-export function withWorldLock<T>(roomId: number, fn: () => Promise<T>): Promise<T> {
-  const prev = roomLocks.get(roomId) ?? Promise.resolve();
-  const next = prev.then(fn, fn);
+let worldLock: Promise<unknown> = Promise.resolve();
+export function withWorldLock<T>(fn: () => Promise<T>): Promise<T> {
+  const next = worldLock.then(fn, fn);
   // Swallow into the stored chain so a rejected op doesn't poison it.
-  roomLocks.set(roomId, next.catch(() => undefined));
+  worldLock = next.catch(() => undefined);
   return next;
-}
-
-function positionKey(ticker: string, direction: string, entryTimestamp: number): string {
-  return `${ticker}:${direction}:${entryTimestamp}`;
-}
-
-function enginePositionFromRow(row: {
-  id: number;
-  ticker: string;
-  direction: string;
-  quantity: number;
-  entryPrice: number;
-  entryTimestamp: Date;
-}): Position {
-  const direction: Direction = row.direction === 'short' ? 'short' : 'long';
-  return {
-    id: `db-${row.id}`,
-    ticker: row.ticker as Ticker,
-    direction,
-    quantity: row.quantity,
-    entryPrice: row.entryPrice,
-    entryTimestamp: row.entryTimestamp.getTime(),
-    // Not persisted: reconstructed from the engine's own rule (Reg-T 50%).
-    marginReserved: direction === 'short' ? INITIAL_MARGIN_RATE * row.quantity * row.entryPrice : 0,
-  };
-}
-
-/** Build an engine Fund from DB position rows (shared shape with rooms.ts engineFundFromRows). */
-function engineFundFromRows(
-  cash: number,
-  startingCapital: number,
-  rows: Array<{
-    id: number;
-    ticker: string;
-    direction: string;
-    quantity: number;
-    entryPrice: number;
-    entryTimestamp: Date;
-  }>,
-): { cash: number; positions: Position[]; realizedPnL: number; startingCapital: number; history: { timestamp: number; nav: number }[] } {
-  return {
-    cash,
-    positions: rows.map(enginePositionFromRow),
-    realizedPnL: 0,
-    startingCapital,
-    history: [],
-  };
-}
-
-function realizedOfClosed(row: {
-  direction: string;
-  quantity: number;
-  entryPrice: number;
-  exitPrice: number | null;
-}): number {
-  if (row.exitPrice === null) return 0;
-  const raw = (row.exitPrice - row.entryPrice) * row.quantity;
-  return row.direction === 'long' ? raw : -raw;
 }
 
 /** Rebuild the rival's engine fund from persisted rows (DB stores no engine objects). */
@@ -155,7 +106,7 @@ async function rebuildRivalFund(fundId: number, market: MarketState): Promise<Ri
   const open = await prisma.position.findMany({ where: { fundId, closedAt: null } });
   const closed = await prisma.position.findMany({ where: { fundId, closedAt: { not: null } } });
   const lastDecisionRow = await prisma.rivalDecisionLog.findFirst({
-    where: { roomId: fund.roomId },
+    where: { fundId },
     orderBy: { timestamp: 'desc' },
   });
 
@@ -190,34 +141,53 @@ async function rebuildRivalFund(fundId: number, market: MarketState): Promise<Ri
   };
 }
 
-/** Load a room's world from persisted state, or bootstrap a fresh one. */
-export async function ensureWorld(roomId: number): Promise<World> {
-  const existing = worlds.get(roomId);
-  if (existing) return existing;
+/**
+ * Load the live world from persisted state, or bootstrap it on first boot.
+ * A corrupt snapshot throws (parseWorldSnapshot) rather than silently starting
+ * a fresh market over a world observers have been watching. Concurrent callers
+ * (a tick and a poll on boot) share one load, so the world is never forked.
+ */
+export const ensureLiveWorld: () => Promise<World> = singleFlight(loadLiveWorld);
 
-  const room = await prisma.room.findUniqueOrThrow({ where: { id: roomId } });
-  let rival = await prisma.fund.findFirst({ where: { roomId, userId: null } });
+async function loadLiveWorld(): Promise<World> {
+
+  const envSeed = process.env.WORLD_SEED;
+  let row = await prisma.world.findUnique({ where: { name: LIVE_WORLD_NAME } });
+  if (row) {
+    const { envIgnored } = resolveWorldSeed(row.seed, envSeed, WORLD_SEED);
+    if (envIgnored) {
+      console.warn(`[world] WORLD_SEED=${envSeed} ignored: world "${row.name}" keeps its persisted seed ${row.seed}`);
+    }
+  } else {
+    const { seed } = resolveWorldSeed(null, envSeed, WORLD_SEED);
+    row = await prisma.world.upsert({
+      where: { name: LIVE_WORLD_NAME },
+      create: { name: LIVE_WORLD_NAME, seed },
+      update: {},
+    });
+  }
+  const worldId = row.id;
+
+  let rival = await prisma.fund.findFirst({ where: { worldId }, orderBy: { id: 'asc' } });
   if (!rival) {
     rival = await prisma.fund.create({
-      data: { roomId, userId: null, name: RIVAL_NAME, cash: STARTING_CAPITAL, startingCapital: STARTING_CAPITAL },
+      data: { worldId, name: RIVAL_NAME, cash: STARTING_CAPITAL, startingCapital: STARTING_CAPITAL },
     });
   }
 
   // Reconstruct from the latest full snapshot — never replay from t=0.
-  const latest = await prisma.marketTick.findFirst({ where: { roomId }, orderBy: { timestamp: 'desc' } });
+  const latest = await prisma.marketTick.findFirst({ where: { worldId }, orderBy: { timestamp: 'desc' } });
   let market: MarketState;
   let scheduler: SchedulerState;
   if (latest) {
-    const snap = JSON.parse(latest.snapshotJson) as { market: MarketState; scheduler: SchedulerState };
-    market = snap.market;
-    scheduler = snap.scheduler;
+    ({ market, scheduler } = parseWorldSnapshot(latest.snapshotJson));
   } else {
     market = createInitialMarket();
     scheduler = initialScheduler();
   }
 
   const eventRows = await prisma.marketEventLog.findMany({
-    where: { roomId },
+    where: { worldId },
     orderBy: { timestamp: 'desc' },
     take: 30,
   });
@@ -232,28 +202,28 @@ export async function ensureWorld(roomId: number): Promise<World> {
     timestamp: r.timestamp.getTime(),
   }));
 
-  const world: World = {
-    roomId,
+  live = {
+    worldId,
+    name: row.name,
+    seed: row.seed,
     market,
     scheduler,
     events,
     rivalFundId: rival.id,
     rivalFund: await rebuildRivalFund(rival.id, market),
     rivalPending: false,
-    rngSeed: (room.id * RNG_SEED_SALT) >>> 0,
+    rivalLiquidated: rival.liquidated,
   };
-  worlds.set(roomId, world);
-  return world;
+  return live;
 }
 
 /**
- * Advance one room's world by one engine tick, persisting as we go.
- * (Same sequencing as the client store's tick(), but every write lands in
- * Postgres so the world survives restarts and runs with no clients attached.)
+ * Advance the world by one engine tick, persisting as we go, so the world
+ * survives restarts and runs with nobody watching.
  */
 async function tickWorld(w: World): Promise<void> {
-  const rng = mulberry32((w.rngSeed ^ Math.imul(w.market.tickCount + 1, 0x85ebca6b)) >>> 0);
-  let next = tickMarket(w.market, w.rngSeed);
+  const rng = mulberry32((w.seed ^ Math.imul(w.market.tickCount + 1, 0x85ebca6b)) >>> 0);
+  let next = tickMarket(w.market, w.seed);
   const scripted = maybeFireScriptedEvent(next, w.scheduler, rng);
   let evt: MarketEvent | null = scripted.event;
   w.scheduler = scripted.next;
@@ -265,16 +235,15 @@ async function tickWorld(w: World): Promise<void> {
   // Done before liquidation so the peak captures the pre-liquidation state.
   await trackPeakNav(w);
 
-  // Server-authoritative liquidation: after prices move, check every player
-  // fund (not the rival) for margin breach. A player closing their tab cannot
-  // dodge this — it runs entirely on the server during the unattended tick.
-  await liquidatePlayerFunds(w);
+  // Server-authoritative liquidation: after prices move, check every fund
+  // for margin breach.
+  await liquidateFunds(w);
 
   if (evt) {
     w.events = [evt, ...w.events].slice(0, EVENT_BUFFER);
     await prisma.marketEventLog.create({
       data: {
-        roomId: w.roomId,
+        worldId: w.worldId,
         type: evt.type,
         ticker: evt.ticker ?? null,
         headline: evt.headline,
@@ -284,23 +253,23 @@ async function tickWorld(w: World): Promise<void> {
     });
   }
 
-  // Periodic FULL snapshot — not every tick — so "what happened while you
-  // were away" reconstructs from the last snapshot, never a replay from t=0.
+  // Periodic FULL snapshot — not every tick — so a restart reconstructs from
+  // the last snapshot, never a replay from t=0.
   if (next.tickCount % SNAPSHOT_EVERY_TICKS === 0) {
     await prisma.marketTick.create({
       data: {
-        roomId: w.roomId,
+        worldId: w.worldId,
         snapshotJson: JSON.stringify({ market: next, scheduler: w.scheduler }),
       },
     });
   }
 
-  // Rival decision cycle (Phase 2, now server-side): every 10 engine ticks,
-  // non-blocking, one in flight at a time.
-  if (next.tickCount > 0 && next.tickCount % RIVAL_DECISION_TICKS === 0 && !w.rivalPending) {
+  // Decision cycle: on the cadence tick, non-blocking, one in flight at a
+  // time, never for a liquidated fund.
+  if (shouldFundDecide(next.tickCount, w.rivalPending, w.rivalLiquidated)) {
     w.rivalPending = true;
     void decideRival(w)
-      .catch((err) => console.error(`[world] room ${w.roomId} rival decision failed`, err))
+      .catch((err) => console.error(`[world] ${w.name} decision failed`, err))
       .finally(() => {
         w.rivalPending = false;
       });
@@ -308,12 +277,12 @@ async function tickWorld(w: World): Promise<void> {
 }
 
 /**
- * Update the all-time high NAV for every fund in the room. Called after each
- * market tick so the peak captures price movement between player trades.
+ * Update the all-time high NAV for every fund in the world. Called after each
+ * market tick so the peak captures price movement between decisions.
  * Cheap: one read + at most one write per fund per tick.
  */
 async function trackPeakNav(w: World): Promise<void> {
-  const funds = await prisma.fund.findMany({ where: { roomId: w.roomId } });
+  const funds = await prisma.fund.findMany({ where: { worldId: w.worldId } });
   for (const f of funds) {
     const open = await prisma.position.findMany({ where: { fundId: f.id, closedAt: null } });
     const ef = engineFundFromRows(f.cash, f.startingCapital, open);
@@ -325,21 +294,20 @@ async function trackPeakNav(w: World): Promise<void> {
 }
 
 /**
- * Check every player fund in the room for liquidation. Server-authoritative:
- * runs during the unattended tick loop, so a player closing their tab cannot
- * dodge a margin call.
+ * Check every fund in the world for liquidation (D-019: AI funds can die).
  *
- * For each non-rival, non-already-liquidated fund: reconstruct the engine Fund
- * from DB rows, run checkLiquidation against the current market. If atRisk,
- * force-close all positions at market price, mark the fund liquidated, compute
- * the cause of death, look for rival context, and write a LiquidationLog.
+ * For each not-yet-liquidated fund: reconstruct the engine Fund from DB rows,
+ * run checkLiquidation against the current market. If atRisk, force-close all
+ * positions at market price, mark the fund liquidated, compute the cause of
+ * death, and write a LiquidationLog. A liquidated fund stays in the world for
+ * observers but stops deciding.
  */
-async function liquidatePlayerFunds(w: World): Promise<void> {
-  const playerFunds = await prisma.fund.findMany({
-    where: { roomId: w.roomId, userId: { not: null }, liquidated: false },
+async function liquidateFunds(w: World): Promise<void> {
+  const funds = await prisma.fund.findMany({
+    where: { worldId: w.worldId, liquidated: false },
   });
 
-  for (const fund of playerFunds) {
+  for (const fund of funds) {
     const openRows = await prisma.position.findMany({
       where: { fundId: fund.id, closedAt: null },
     });
@@ -355,10 +323,6 @@ async function liquidatePlayerFunds(w: World): Promise<void> {
     const peak = fund.peakNav > 0 ? fund.peakNav : peakNav(engineFund);
     const tickCountAt = w.market.tickCount;
     const durationTicks = tickCountAt; // ticks since fund creation (t=0 bootstrap)
-
-    // Look for rival context: recent confrontational decisions against the
-    // player's now-closed positions.
-    const rivalContext = await computeRivalContext(w.roomId, engineFund.positions, tickCountAt);
 
     await prisma.$transaction([
       // Mark every open position as closed at market price.
@@ -381,69 +345,26 @@ async function liquidatePlayerFunds(w: World): Promise<void> {
       }),
       prisma.liquidationLog.create({
         data: {
-          roomId: w.roomId,
+          worldId: w.worldId,
           fundId: fund.id,
           startingCapital: fund.startingCapital,
           peakNav: peak,
           finalNav: markToMarket(closed, w.market).nav,
           cause,
-          rivalContext,
+          rivalContext: null,
           tickCountAt,
           durationTicks,
         },
       }),
     ]);
 
-    console.log(`[world] room ${w.roomId} fund ${fund.id} LIQUIDATED — ${cause}${rivalContext ? ` | rival: ${rivalContext}` : ''}`);
-  }
-}
-
-/**
- * Look back at recent rival decisions to see if any were confrontational
- * against the player's positions at the moment of liquidation. Returns a
- * human-readable context line, or null when the liquidation was purely the
- * player's own leverage.
- *
- * The lookback window is the last 6 rival decisions (≈60 engine ticks) —
- * close enough to be causally plausible, far enough to catch the relevant
- * "the rival just went short what you're long" moments.
- */
-async function computeRivalContext(
-  roomId: number,
-  playerPositions: Position[],
-  tickCountAt: number,
-): Promise<string | null> {
-  if (playerPositions.length === 0) return null;
-
-  const recentDecisions = await prisma.rivalDecisionLog.findMany({
-    where: { roomId, tickCountAt: { lte: tickCountAt } },
-    orderBy: { timestamp: 'desc' },
-    take: 6,
-  });
-
-  // Replay the most recent decisions first; surface the first confrontation.
-  for (const row of recentDecisions) {
-    if (!row.ticker) continue;
-    const lastDecision: RivalLastDecision = {
-      action: row.action as RivalLastDecision['action'],
-      ticker: row.ticker,
-      reasoning: row.reasoning,
-      confidence: row.confidence ?? 0.7,
-      timestamp: row.tickCountAt ?? 0,
-      fillPrice: row.fillPrice ?? undefined,
-      realizedPnL: row.realizedPnL ?? undefined,
-    };
-    const evt = detectConfrontation(playerPositions, lastDecision);
-    if (evt) {
-      const dt = tickCountAt - (row.tickCountAt ?? 0);
-      const timing = dt <= 2 ? 'moments after' : dt <= 10 ? 'shortly after' : 'after';
-      const dirWord = evt.kind === 'opposite'
-        ? (lastDecision.action === 'short' ? `went short ${evt.ticker} — directly against your position` : `went long ${evt.ticker} — directly against your short`)
-        : `banked +$${Math.round((evt.rivalGain ?? 0) / 1000)}K on ${evt.ticker} while you were underwater`;
-      return `Liquidated ${timing} ${RIVAL_NAME} ${dirWord}`;
+    if (fund.id === w.rivalFundId) {
+      w.rivalFund = { ...w.rivalFund, cash: closed.cash, positions: closed.positions };
+      w.rivalLiquidated = true;
     }
+
+    console.log(`[world] ${w.name} fund ${fund.id} LIQUIDATED — ${cause}`);
   }
-  return null;
 }
 
 /** Persist the rival's state delta after a decision (fund cash + positions + log). */
@@ -484,7 +405,7 @@ async function persistRivalState(w: World, before: RivalFund, after: RivalFund, 
     ),
     prisma.rivalDecisionLog.create({
       data: {
-        roomId: w.roomId,
+        worldId: w.worldId,
         fundId: w.rivalFundId,
         action: decision.action,
         ticker: decision.ticker ?? null,
@@ -507,7 +428,7 @@ async function decideRival(w: World): Promise<void> {
   // LLM when a key exists; the deterministic twin otherwise. makeLLMDecision
   // also self-falls-back to the twin on any call/parse failure.
   //
-  // The LLM call is deliberately OUTSIDE the room lock (multi-second latency
+  // The LLM call is deliberately OUTSIDE the world lock (multi-second latency
   // must not stall the market). The mutation and persistence below re-acquire
   // the lock and re-read the current market so a trade/decision that resolved
   // against stale prices is never applied on top of fresher ones.
@@ -518,9 +439,11 @@ async function decideRival(w: World): Promise<void> {
       })
     : makeRandomDecision(input);
 
-  await withWorldLock(w.roomId, async () => {
+  await withWorldLock(async () => {
+    // Liquidated while the LLM was thinking: the decision is void (D-019).
+    if (w.rivalLiquidated) return;
     let market = w.market;
-    // The rival moves prices exactly like the player: applyTrade first.
+    // The rival moves prices like any trader: applyTrade first.
     if ((decision.action === 'buy' || decision.action === 'short') && decision.ticker && decision.dollarAmount) {
       const impacted = applyTrade(
         market,
@@ -538,31 +461,18 @@ async function decideRival(w: World): Promise<void> {
   });
 }
 
-/** Tick every active room. Sequential on purpose: single-flight per interval. */
-async function tickAllActiveRooms(): Promise<void> {
-  try {
-    const rooms = await prisma.room.findMany({ where: { status: 'active' }, select: { id: true } });
-    for (const room of rooms) {
-      try {
-        const w = worlds.get(room.id) ?? (await ensureWorld(room.id));
-        // Serialize against concurrent trade handlers for this room.
-        await withWorldLock(room.id, () => tickWorld(w));
-      } catch (err) {
-        console.error(`[world] room ${room.id} tick failed`, err);
-      }
-    }
-  } catch (err) {
-    console.error('[world] tick pass failed', err);
-  }
-}
-
 /** Start the world clock. Returns a stop function (tests / graceful shutdown). */
 export function startWorldLoop(): () => void {
   const timer = setInterval(() => {
-    void tickAllActiveRooms();
+    void (async () => {
+      try {
+        const w = await ensureLiveWorld();
+        await withWorldLock(() => tickWorld(w));
+      } catch (err) {
+        console.error('[world] tick failed', err);
+      }
+    })();
   }, TICK_INTERVAL_MS);
   console.log(`[world] clock started - ticking every ${TICK_INTERVAL_MS}ms`);
   return () => clearInterval(timer);
 }
-
-
