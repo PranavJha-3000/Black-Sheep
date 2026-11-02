@@ -52,7 +52,7 @@ export interface ExperimentSpec {
   name: string;
   base: ArmConfig;
   variable: ExperimentVariable;
-  /** One arm per value; the first arm is the baseline. */
+  /** One arm per value; each fund's baseline is the first arm that contains it. */
   values: unknown[];
   seeds: number[];
 }
@@ -98,8 +98,12 @@ export interface SimState {
   funds: SimFund[];
 }
 
+/** Registry order: the live world's fund-id order, so the order a roster is listed in never matters. */
+const registryRank = (key: string) => FUND_PROFILES.findIndex((p) => p.key === key);
+
 export function initialSimState(arm: ArmConfig, seed: number): SimState {
-  const funds = arm.funds.map((key): SimFund => {
+  const keys = [...arm.funds].sort((a, b) => registryRank(a) - registryRank(b));
+  const funds = keys.map((key): SimFund => {
     const profile = getFundProfile(key);
     if (!profile) throw new Error(`Unknown fund key: ${key}`);
     const every = arm.decisionEveryTicks ?? profile.decisionEveryTicks;
@@ -181,12 +185,17 @@ export function stepWorld(s: SimState): void {
     for (const f of s.funds) f.navs.push(markToMarket(f.fund, s.market).nav);
   }
 
-  // Each fund on its own slot, never once liquidated.
-  for (const f of s.funds) {
-    const t = s.market.tickCount;
-    if (f.liquidated || t === 0 || t % f.every !== f.offset) continue;
-    const input = buildDecisionInput(f.fund, s.market, s.recentEvents, s.market.recentFlow);
-    const decision = enforceRiskLimit(decideByPolicy(f.profile, input), input, f.profile);
+  // Each fund on its own slot, never once liquidated. As in the live world,
+  // every fund deciding this tick reads the same pre-trade market; the trades
+  // then apply one after another, in registry order, on the moving market.
+  const t = s.market.tickCount;
+  const deciding = s.funds
+    .filter((f) => !f.liquidated && t !== 0 && t % f.every === f.offset)
+    .map((f) => {
+      const input = buildDecisionInput(f.fund, s.market, s.recentEvents, s.market.recentFlow);
+      return { f, decision: enforceRiskLimit(decideByPolicy(f.profile, input), input, f.profile) };
+    });
+  for (const { f, decision } of deciding) {
     f.decisions++;
     let market = s.market;
     if ((decision.action === 'buy' || decision.action === 'short') && decision.ticker && decision.dollarAmount) {
@@ -308,8 +317,10 @@ export interface FundArmStats {
   sharpe: Stat;
   /** Share of runs the fund survived. */
   survival: number;
-  /** Paired by seed against the first arm; null for the first arm. */
+  /** Paired by seed against this fund's baseline arm; null in the baseline arm itself. */
   vsBaseline: { meanDiff: number; wins: number; pairs: number } | null;
+  /** The first arm containing this fund (a mixed world is compared with the fund alone). */
+  baselineLabel: string | null;
 }
 
 export interface ArmComparison {
@@ -332,7 +343,6 @@ const mean = (xs: number[]) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.l
 export function compareArms(arms: { label: string; runs: RunResult[] }[], startingCapital = STARTING_CAPITAL): ArmComparison[] {
   const returnsBySeed = (runs: RunResult[], key: string) =>
     new Map(runs.map((r) => [r.seed, seriesMetrics(r.funds.find((f) => f.key === key)?.navs ?? [], startingCapital).totalReturn]));
-  const baseline = arms[0];
 
   return arms.map((arm, i) => {
     const keys = [...new Set(arm.runs.flatMap((r) => r.funds.map((f) => f.key)))];
@@ -340,7 +350,9 @@ export function compareArms(arms: { label: string; runs: RunResult[] }[], starti
       const runs = arm.runs.map((r) => r.funds.find((f) => f.key === key)).filter((f) => f !== undefined);
       const m = runs.map((f) => seriesMetrics(f.navs, startingCapital));
       let vsBaseline: FundArmStats['vsBaseline'] = null;
-      if (i > 0 && baseline) {
+      const baselineIndex = arms.findIndex((a) => a.runs.some((r) => r.funds.some((f) => f.key === key)));
+      const baseline = baselineIndex >= 0 && baselineIndex < i ? arms[baselineIndex] : null;
+      if (baseline) {
         const base = returnsBySeed(baseline.runs, key);
         const mine = returnsBySeed(arm.runs, key);
         const diffs: number[] = [];
@@ -359,6 +371,7 @@ export function compareArms(arms: { label: string; runs: RunResult[] }[], starti
         sharpe: stat(m.map((x) => x.sharpe)),
         survival: runs.length ? runs.filter((f) => !f.liquidated).length / runs.length : 0,
         vsBaseline,
+        baselineLabel: baseline?.label ?? null,
       };
     });
     return {

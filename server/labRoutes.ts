@@ -16,7 +16,12 @@ const LIST_LIMIT = 50;
 labRouter.get(
   '/experiments',
   wrap(async (_req, res) => {
-    const rows = await prisma.experiment.findMany({ orderBy: { id: 'desc' }, take: LIST_LIMIT });
+    // Summary columns only: result blobs can be large and the list is polled.
+    const rows = await prisma.experiment.findMany({
+      orderBy: { id: 'desc' },
+      take: LIST_LIMIT,
+      select: { id: true, createdAt: true, name: true, status: true, variable: true, specJson: true, finishedAt: true },
+    });
     res.json({ experiments: rows.map(buildExperimentSummary) });
   }),
 );

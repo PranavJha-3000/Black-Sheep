@@ -149,10 +149,10 @@ function ExperimentResultView({ d }: { d: ExperimentDetail }) {
                   </tr>
                 </thead>
                 <tbody>
-                  {r.arms.flatMap((arm, ai) =>
+                  {r.arms.flatMap((arm) =>
                     arm.funds.map((f, fi) => (
                       <tr key={`${arm.label}-${f.key}`} className={cx(fi === 0 && 'border-t border-terminal-border')}>
-                        <td className="px-2 py-1 text-terminal-dim">{fi === 0 ? `${arm.label}${ai === 0 ? ' (baseline)' : ''}` : ''}</td>
+                        <td className="px-2 py-1 text-terminal-dim">{fi === 0 ? arm.label : ''}</td>
                         <td className="px-2 py-1 font-bold">{f.name}</td>
                         <td className="px-2 py-1 tabular-nums">{f.n}</td>
                         <td className={cx('px-2 py-1 tabular-nums', f.totalReturn.mean !== null && (f.totalReturn.mean >= 0 ? 'text-terminal-green' : 'text-terminal-red'))}>
@@ -162,7 +162,10 @@ function ExperimentResultView({ d }: { d: ExperimentDetail }) {
                         <td className="px-2 py-1 tabular-nums">{pct(f.maxDrawdown.mean)}</td>
                         <td className="px-2 py-1 tabular-nums">{f.sharpe.mean === null ? '—' : fmtNum(f.sharpe.mean, 3)}</td>
                         <td className={cx('px-2 py-1 tabular-nums', f.survival < 1 && 'text-terminal-red')}>{pct(f.survival, 0)}</td>
-                        <td className="px-2 py-1 tabular-nums">{f.vsBaseline ? signedPct(f.vsBaseline.meanDiff) : '—'}</td>
+                        <td className="px-2 py-1 tabular-nums">
+                          {f.vsBaseline ? signedPct(f.vsBaseline.meanDiff) : <span className="text-terminal-dim">baseline</span>}
+                          {f.baselineLabel && <span className="block text-[10px] text-terminal-dim">vs {f.baselineLabel}</span>}
+                        </td>
                         <td className="px-2 py-1 tabular-nums">{f.vsBaseline ? `${f.vsBaseline.wins}/${f.vsBaseline.pairs}` : '—'}</td>
                       </tr>
                     )),
@@ -218,7 +221,7 @@ function ExperimentResultView({ d }: { d: ExperimentDetail }) {
 
           <Section title="LIMITATIONS">
             <ul className="list-disc space-y-1 pl-5 text-[11px] text-terminal-dim">
-              <li>n = number of seeds. Mean ± sample standard deviation; Δ is paired by seed against the baseline arm. This is not a significance test.</li>
+              <li>n = number of seeds. Mean ± sample standard deviation; Δ is paired by seed against the fund's baseline — the first arm that contains it. This is not a significance test.</li>
               <li>Policy-only worlds: funds use their deterministic policies, so these results compare rules and world settings, not language models.</li>
               <li>Sharpe and drawdown are per NAV snapshot (every 3 ticks) and not annualised.</li>
               <li>A run is reproducible from its seed and configuration: rerunning it must give the same digest.</li>

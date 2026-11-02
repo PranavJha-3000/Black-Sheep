@@ -25,5 +25,5 @@ Full plan: `docs/superpowers/plans/2026-11-02-stage8-research-lab.md`
 D-032, D-033 (and the D-029 recalibration note)
 
 ## Verification
-`npm run typecheck` 0, `npm test` 265/265, `npm run lint` 0, `npm run build` ✓; boot smoke — POST 503 / 401 / 400 paths, GET 404; Vite smoke — results rendered from a real 2-arm × 5-seed engine result.
+`npm run typecheck` 0, `npm test` 268/268, `npm run lint` 0, `npm run build` ✓; boot smoke — POST 503 / 401 / 400 paths, GET 404; Vite smoke — results rendered from a real 2-arm × 5-seed engine result.
 Not verified: the migration, the runner and routes against a live DB (no Postgres).

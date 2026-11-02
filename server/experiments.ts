@@ -1,3 +1,4 @@
+import { experimentManifest } from '@black-sheep/engine/experiment';
 import { prisma } from './db';
 import { parseExperimentRequest, runExperimentSpec } from './labCore';
 import { EXPERIMENT_POLL_MS } from '../config/game';
@@ -38,7 +39,14 @@ export async function runNextExperiment(): Promise<boolean> {
       const result = await runExperimentSpec(parsed.spec, yieldToEventLoop);
       await prisma.experiment.update({
         where: { id: next.id },
-        data: { status: 'done', resultJson: JSON.stringify(result), finishedAt: new Date() },
+        // The manifest is recomputed here so it describes the code and config that actually ran (a queued
+        // experiment can outlive a redeploy).
+        data: {
+          status: 'done',
+          manifestJson: JSON.stringify(experimentManifest(parsed.spec)),
+          resultJson: JSON.stringify(result),
+          finishedAt: new Date(),
+        },
       });
     } catch (err) {
       await prisma.experiment.update({

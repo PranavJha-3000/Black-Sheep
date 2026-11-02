@@ -13,7 +13,7 @@ import {
   type ExperimentVariable,
   type RunResult,
 } from '@black-sheep/engine/experiment';
-import { getFundProfile } from '@black-sheep/engine/funds';
+import { FUND_PROFILES, getFundProfile } from '@black-sheep/engine/funds';
 import {
   EXPERIMENT_MAX_ARMS,
   EXPERIMENT_MAX_SEEDS,
@@ -40,7 +40,9 @@ function checkFunds(x: unknown): Check<string[]> {
   if (!Array.isArray(x) || x.length === 0) return fail('A fund set must list at least one registry fund key.');
   if (new Set(x).size !== x.length) return fail('A fund set lists the same fund twice.');
   for (const k of x) if (typeof k !== 'string' || !getFundProfile(k)) return fail(`Unknown fund key: ${String(k)}.`);
-  return { ok: true, value: x as string[] };
+  // A set: registry order, so the same roster listed twice in different orders is one arm.
+  const order = (k: string) => FUND_PROFILES.findIndex((p) => p.key === k);
+  return { ok: true, value: [...(x as string[])].sort((a, b) => order(a) - order(b)) };
 }
 
 function checkDirector(x: unknown): Check<ArmConfig['directorMode']> {
@@ -204,7 +206,9 @@ function parseJson<T>(json: string | null): T | null {
   }
 }
 
-export function buildExperimentSummary(row: ExperimentRow): ExperimentSummary {
+export type ExperimentSummaryRow = Pick<ExperimentRow, 'id' | 'createdAt' | 'name' | 'status' | 'variable' | 'specJson' | 'finishedAt'>;
+
+export function buildExperimentSummary(row: ExperimentSummaryRow): ExperimentSummary {
   const spec = parseJson<ExperimentSpec>(row.specJson);
   return {
     id: row.id,

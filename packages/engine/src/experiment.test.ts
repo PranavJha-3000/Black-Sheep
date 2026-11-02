@@ -133,10 +133,12 @@ describe('compareArms', () => {
     expect(a.totalReturn.mean).toBeCloseTo(0.05, 10);
     expect(a.totalReturn.std).toBeCloseTo(Math.sqrt(0.005), 10);
     expect(a.vsBaseline).toBeNull();
+    expect(a.baselineLabel).toBeNull();
     const b = arms[1].funds[0];
     expect(b.survival).toBe(0.5);
     // Seed 1: +0.10, seed 2: -0.10 → mean 0; B beats A on one seed.
     expect(b.vsBaseline).toEqual({ meanDiff: expect.closeTo(0, 10), wins: 1, pairs: 2 });
+    expect(b.baselineLabel).toBe('A');
     expect(arms[1].meanDirectorInterventions).toBe(0.5);
   });
 
@@ -155,5 +157,52 @@ describe('downsample', () => {
     expect(d[0]).toBe(0);
     expect(d[d.length - 1]).toBe(999);
     expect(downsample([1, 2, 3], 200)).toEqual([1, 2, 3]);
+  });
+});
+
+describe('same-tick decisions (review I-1)', () => {
+  it('every fund deciding on a tick sees the pre-trade market, as in the live world', () => {
+    // Cadence 3 puts all three funds on offset 0: they decide on the same ticks.
+    const arm: ArmConfig = { ...base, decisionEveryTicks: 3 };
+    const together = initialSimState(arm, 21);
+    for (let i = 0; i < 3; i++) stepWorld(together);
+    for (const key of ALL) {
+      const alone = initialSimState({ ...arm, funds: [key] }, 21);
+      for (let i = 0; i < 3; i++) stepWorld(alone);
+      // Tick 3 is the first decision tick, so before it the worlds are identical.
+      const strip = (d: unknown) => {
+        const { timestamp: _t, ...rest } = (d ?? {}) as Record<string, unknown>;
+        return rest;
+      };
+      expect(strip(together.funds.find((f) => f.profile.key === key)!.fund.lastDecision)).toEqual(strip(alone.funds[0].fund.lastDecision));
+    }
+  });
+
+  it('the order funds are listed in does not change the world', () => {
+    const arm: ArmConfig = { ...base, decisionEveryTicks: 3, ticks: 400 };
+    const a = simulateWorld(arm, 8);
+    const b = simulateWorld({ ...arm, funds: [...ALL].reverse() }, 8);
+    expect(a.digest).toBe(b.digest);
+    for (const f of a.funds) expect(b.funds.find((x) => x.key === f.key)!.navs).toEqual(f.navs);
+  });
+});
+
+describe('compareArms baselines (review I-3)', () => {
+  it('pairs each fund with the first arm that contains it, so a mixed world is compared with each fund alone', () => {
+    const arms = compareArms(
+      [
+        { label: 'funds=f', runs: [run(1, { f: 110 })] },
+        { label: 'funds=g', runs: [run(1, { g: 90 })] },
+        { label: 'funds=f+g', runs: [run(1, { f: 100, g: 100 })] },
+      ],
+      100,
+    );
+    expect(arms[0].funds[0]).toMatchObject({ vsBaseline: null, baselineLabel: null });
+    expect(arms[1].funds[0]).toMatchObject({ vsBaseline: null, baselineLabel: null });
+    const [f, g] = arms[2].funds;
+    expect(f.baselineLabel).toBe('funds=f');
+    expect(f.vsBaseline).toEqual({ meanDiff: expect.closeTo(-0.1, 10), wins: 0, pairs: 1 });
+    expect(g.baselineLabel).toBe('funds=g');
+    expect(g.vsBaseline).toEqual({ meanDiff: expect.closeTo(0.1, 10), wins: 1, pairs: 1 });
   });
 });

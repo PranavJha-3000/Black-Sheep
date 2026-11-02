@@ -44,11 +44,13 @@ describe('experiment runner', () => {
   it('runs the oldest queued experiment to done with its result', async () => {
     db.rows = [
       { id: 2, status: 'queued', specJson: JSON.stringify(spec) },
-      { id: 1, status: 'queued', specJson: JSON.stringify(spec) },
+      { id: 1, status: 'queued', specJson: JSON.stringify(spec), manifestJson: 'stale' } as typeof db.rows[number],
     ];
     await expect(runNextExperiment()).resolves.toBe(true);
-    const done = db.rows.find((r) => r.id === 1)!;
+    const done = db.rows.find((r) => r.id === 1)! as typeof db.rows[number] & { manifestJson?: string };
     expect(done.status).toBe('done');
+    // Recomputed at run time (review I-2): a stale create-time manifest is replaced.
+    expect(JSON.parse(done.manifestJson!)).toMatchObject({ policyOnly: true, seeds: [1] });
     expect(JSON.parse(done.resultJson!).arms).toHaveLength(2);
     expect(db.rows.find((r) => r.id === 2)!.status).toBe('queued');
   });

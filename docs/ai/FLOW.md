@@ -72,8 +72,8 @@ Fragile: every field added to a builder is public; keep `observerCore.test.ts`'s
 Entry: `server/labRoutes.ts`; runner `server/experiments.ts → startExperimentRunner()` (started beside the world loop in `server/index.ts`)
 
 1. `POST /lab/experiments`: `checkLabToken(header, LAB_ADMIN_TOKEN)` → 503 if unset / 401 → `parseExperimentRequest` (name, one variable, 2–6 distinct values, base funds/director/cadence/ticks ≤ 5000, 1–10 distinct seeds) → 400 → `Experiment` row `queued` with `specJson` + `experimentManifest` → 201 `{id}`.
-2. Runner: on start, `running` rows → `queued`. Every 2 s, if idle: oldest `queued` → claim (`updateMany` where still queued) → re-validate the stored spec → `runExperimentSpec`: for each arm (`expandArms`) and seed, `simulateWorld` (pure; the live tick's engine calls, synchronous) then `setImmediate` yield → `compareArms` + downsampled series + digests → `done` (or `failed` with the error).
-3. `GET /lab/experiments` (newest 50 summaries), `GET /lab/experiments/:id` (spec, manifest, result; corrupt JSON → null; 404).
+2. Runner: on start, `running` rows → `queued`. Every 2 s, if idle: oldest `queued` → claim (`updateMany` where still queued) → re-validate the stored spec → `runExperimentSpec`: for each arm (`expandArms`) and seed, `simulateWorld` (pure; the live tick's engine calls, synchronous; same-tick deciders read the pre-trade market) then `setImmediate` yield → `compareArms` + downsampled series + digests → `done` with a manifest recomputed at run time (or `failed` with the error).
+3. `GET /lab/experiments` (newest 50 summaries; summary columns only), `GET /lab/experiments/:id` (spec, manifest, result; corrupt JSON → null; 404).
 4. Client: `gameStore` fetches the list and the open experiment only in RESEARCH LAB, at most every 5 s; a detail for a deselected experiment is dropped; `createExperiment(body, token)` sends the token with that request only.
 
 Assumptions: one server process (one runner). Experiment worlds share nothing with the live world.
