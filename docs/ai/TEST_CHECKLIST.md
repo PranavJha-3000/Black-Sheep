@@ -66,3 +66,12 @@ Run before any change counts as done.
 - [ ] (Needs DB) first boot: `/world/state` lists STERLING & VALE, HALDEN WHITMORE, CROWN MERIDIAN with `profile` set; an existing `APEX CAPITAL` row has `profile: null` and gains no new `RivalDecisionLog` rows
 - [ ] (Needs DB) without a key: within ~60s each registry fund logs a decision on its own tick slot (tickCountAt % 10 = 0 / 3 / 6)
 - [ ] (Needs DB) restart on a pre-Stage-3 snapshot → `market.companies` has 10 entries and the original six keep their prices
+
+### Stage 4 — decision cycle, tools, metering
+- [ ] `npm test` includes `server/budget.test.ts`, `server/providers/anthropic.test.ts`, `packages/engine/src/fundTools.test.ts`
+- [ ] `git grep -n "makeLLMDecision\|api.anthropic.com" -- packages server src` → no output
+- [ ] Vite dev → each registry fund card shows `$x.xx / $2.00` and the last decision's source (LLM / POLICY / BUDGET)
+- [ ] (Needs DB) `npx prisma migrate deploy` applies `20261102020000_decision_metering`; `\dt` shows `LlmCallLog`, `ToolCallLog`
+- [ ] (Needs DB, no key) `RivalDecisionLog.source = 'policy'` on every new row; no `LlmCallLog` rows
+- [ ] (Needs DB + key) a decision writes one `LlmCallLog` row (cost > 0) plus its `ToolCallLog` rows and a `RivalDecisionLog` with `source = 'llm'` and `llmCallId` set; once a fund's day spend nears $2 its rows show `source = 'budget'`
+- [ ] (Needs DB + key) restart mid-day → `/world/state` `spend.todayUsd` keeps the day's spend

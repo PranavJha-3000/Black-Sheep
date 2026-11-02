@@ -1,5 +1,12 @@
 # Rollback
 
+## Stage 4 decision cycle · 2026-11-02
+Safe commit: `557fc28` (main). Work lives on branch `feat/stage4-decision-cycle`.
+Revert with: `git switch main` (branch unmerged), or after merge `git revert -m 1 <merge commit>`, then `npm install` to drop `@anthropic-ai/sdk`.
+Files touched: `config/{game,funds,models}.ts`, `packages/engine/src/{fundTools (new),rivalLLM,policies}.ts` + tests, `server/{budget (new),world,worldCore,worldRoutes}.ts` + tests, `server/providers/anthropic.ts` + test (new), `prisma/schema.prisma`, `prisma/migrations/20261102020000_decision_metering/` (new), `src/store/stateMapper{,.test}.ts`, `src/components/FundsStrip.tsx`, `package.json`, `package-lock.json`, `docs/**`.
+Non-code changes to undo: migration `20261102020000_decision_metering` adds tables `LlmCallLog`, `ToolCallLog` and columns `RivalDecisionLog.{source,model,llmCallId}` + an index. It has never been applied (no DB). If applied, reverted code ignores the extra columns/tables (all defaulted or nullable); to drop them: `DROP TABLE "ToolCallLog"; DROP TABLE "LlmCallLog"; ALTER TABLE "RivalDecisionLog" DROP COLUMN "llmCallId", DROP COLUMN "model", DROP COLUMN "source";` and delete the `_prisma_migrations` row — or `docker compose down -v` (DESTROYS all world data). Never edit the applied migration.
+Re-check after rollback: `npm run typecheck`; `npm test`; `npm run lint`; `npm run build`.
+
 ## Stage 3 fund registry · 2026-11-02
 Safe commit: `d4936e3` (main). Work lives on branch `feat/stage3-fund-registry`.
 Revert with: `git switch main` (branch unmerged), or after merge `git revert -m 1 <merge commit>`.

@@ -1,14 +1,16 @@
 # Handover
 
 ## Current state
-- Working: **Stage 3 fund registry complete** (branch `feat/stage3-fund-registry`). Three configured AI funds — STERLING & VALE (cautious), HALDEN WHITMORE (aggressive), CROWN MERIDIAN (quant) — each with mandate, model (`claude-opus-5-5`), risk limit and a staggered decision slot (D-020); in-character fallback policies and a risk-limit clamp on every decision (D-021); a 10-company market (D-022); FundsStrip shows every fund. Stages 1–2 are merged to `main`.
-- In progress: nothing. Stage 4 (decision cycle, tools, cost metering) is next.
+- Working: **Stage 4 decision cycle complete** (branch `feat/stage4-decision-cycle`). Funds research with five pure read-only tools and submit through a bounded, metered tool loop in the server-only `@anthropic-ai/sdk` adapter (D-023, D-024); every call reserves its worst case against a $2/fund and $10 global daily budget with ≤2 calls in flight, is logged with tokens/cost/tools, and every decision records its source (D-025). FundsStrip shows spend vs budget and source. Stages 1–3 are merged to `main`.
+- In progress: nothing. Stage 5 (persistent agent memory) is next.
 - Broken: nothing known — typecheck, tests, lint and build green. Live-DB and live-provider behaviour UNVERIFIED (no Postgres, no key used).
 - Avoid: Do not duplicate engine logic — import `@black-sheep/engine/*`. Every async Express route goes through `wrap()`. Prisma pinned to v6. Never call an LLM from the browser (VISION §14.9). Every field added to `buildWorldStatePayload` is public. Run ONE server process per DB. A fund's identity is its registry `name` — renaming an entry starts a new fund.
 
 ## Open items
 - [ ] Delete parked branch `wip/stage2-global-world` (user decision; nothing from it was merged).
-- [ ] **Cost:** with `ANTHROPIC_API_KEY` set the world makes ~3.6 Opus 5.5 calls/min with no budget cap — Stage 4 adds metering and per-fund budgets; until then run without a key or switch `config/funds.ts` models.
+- [ ] **Cost (Stage 4):** with a key, spend is capped at $2/fund/day and $10/day overall (`config/funds.ts`, `config/game.ts`). Never verified against a live key — first live run: watch `LlmCallLog` cost per call vs the ~$0.38 worst-case estimate.
+- [ ] `npm audit` reports high/critical advisories in express (body-parser, qs, proxy-addr) and prisma (deepmerge-ts) transitive deps — pre-existing, not from `@anthropic-ai/sdk`; upgrade in a deps pass.
+- [ ] Stage 3/4 review minors (deferred): `funds.test` doesn't reject `decisionEveryTicks <= 0`; FundsStrip grid is fixed-width at 3 columns on large screens.
 - [ ] Legacy `APEX CAPITAL` fund (Stage 2) stays in an existing world as an observed, non-deciding fund (D-020) — decide whether to retire it in a schema/data pass.
 - [ ] Stage 2 review minors (deferred): `/world/state` + tick loop are N+1 (add `@@index([fundId, timestamp])` on RivalDecisionLog, batch queries); route reads `w.market` outside the lock; ticks can queue if one exceeds 5s; failed world load retries every tick/poll; latest snapshot picked by timestamp not id and MarketTick is never pruned; restart loses ≤2 ticks; `verify-backend.ps1` should use `prisma migrate deploy`; `decideRival` mutates memory before persist succeeds (pre-existing).
 - [ ] Confirm: should the public payload expose `world.seed`? With the client-side engine it lets observers predict upcoming price noise (kept for now; observers cannot act).
@@ -21,6 +23,12 @@
 - [ ] Live-DB verification still blocked on WSL/Docker (`wsl --install -d Ubuntu`, reboot, then `scripts/verify-backend.ps1`). The init migration exists; run `npx prisma migrate deploy` (not `migrate dev --name init`, which would create a second migration) on first DB boot.
 
 ## Log
+
+### 2026-11-02 · Claude Opus 5.5 (Claude Code) · Stage 4 decision cycle
+CHANGED: Engine `fundTools.ts` (5 tools, pure handlers) and a pure `rivalLLM.ts` (prompt + parsing only); server `budget.ts` (pricing + `BudgetLedger`) and `providers/anthropic.ts` (SDK adapter + bounded tool loop); migration `20261102020000_decision_metering` (`LlmCallLog`, `ToolCallLog`, `RivalDecisionLog.source/model/llmCallId`); `world.ts` decides via `chooseDecision` (policy / budget / llm) and seeds the ledger from today's spend; `/world/state` exposes per-fund `spend` and decision `source`/`model`; FundsStrip shows them. New dep `@anthropic-ai/sdk`.
+WHY: VISION §6, §12, §14 — research tools, bounded cost, server-side adapters. See D-023…D-025.
+VERIFY: after every task `npm run typecheck` 0, `npm test` green (157/157 at Task 4), `npm run lint` 0; `npm run build` ✓; `npx prisma validate` ✓ and `prisma generate` ✓ on the new schema.
+NOT VERIFIED: migration apply, ledger seeding and call logging on a real DB; any live Opus 5.5 response (no key used).
 
 ### 2026-11-02 · Claude Opus 5.5 (Claude Code) · Stage 3 fund registry
 CHANGED: New `config/funds.ts` + `config/models.ts` registries; engine `funds.ts` (FundProfile) and `policies.ts` (`decideByPolicy`, `enforceRiskLimit`); `makeLLMDecision` takes a per-fund brain (prompt, model, effort, fallback), handles refusals and thinking blocks, and no longer hardcodes a model; four new companies (VOLT, FORGE, CURA, LEDG). Server: one `Agent` per registry fund with its own cadence slot and pending flag, missing registry funds upserted on load, old snapshots gain new listings, `/world/state` carries each fund's public `profile`. Client: FundsStrip, store `funds`, seed market from the engine.
