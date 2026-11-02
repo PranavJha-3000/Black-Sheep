@@ -74,11 +74,3 @@ export const EVENT_FIRE_DELAY_MIN = 15;
 export const EVENT_FIRE_DELAY_JITTER = 6;
 /** Per-tick probability of an ambient (non-scripted) event firing. */
 export const EVENT_AMBIENT_CHANCE = 0.14;
-
-// --- Away summary (packages/engine/src/away.ts) ---
-/** Minimum away window (ms) before the re-engagement takeover can show. */
-export const AWAY_MIN_MS = 2 * 60 * 1000;
-/** NAV must move at least this many dollars for the window to be notable. */
-export const AWAY_NAV_NOTABLE_DOLLARS = 25_000;
-/** A single position must move at least this many dollars to be notable. */
-export const AWAY_POS_NOTABLE_DOLLARS = 10_000;

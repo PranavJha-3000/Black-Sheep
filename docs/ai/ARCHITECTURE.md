@@ -9,7 +9,7 @@
 | `server/rooms.ts` | POST /rooms (code + rival fund), POST /:code/join, GET /:code/state — read-only; no human trade route since Stage 1 (firewall-respecting, now includes `liquidated`/`liquidationCause`/`liquidationRivalContext` in `me`) | db, engine, auth, world |
 | `server/world.ts` | Per-room in-memory world; 5s loop; snapshots + event logs; rival decision cycle + state-diff persistence; **server-authoritative liquidation** (`liquidatePlayerFunds`); **peak NAV tracking** (`trackPeakNav`) | db, engine |
 | `server/resultCard.ts` | GET /funds/:id/result-card (public JSON) + GET /funds/:id/result-card.png (public 1200×630 PNG via @vercel/og) | db, engine (read-only) |
-| `server/index.ts` | Express app, routes (auth, rooms, away, **funds/result-card**), error handler, world clock start | all server modules |
+| `server/index.ts` | Express app, routes (auth, rooms, **funds/result-card**), error handler, world clock start | all server modules |
 | `server/index.ts` | Express app, routes, error handler, world clock start | all server modules |
 | `prisma/schema.prisma` | Postgres schema: User, Room, Fund, Position, MarketTick, MarketEventLog, RivalDecisionLog | @prisma/client |
 | `src/store/gameStore.ts` | Client-only zustand store (Phase 1-2 single-player loop; Phase 4 will consume the server) | engine |

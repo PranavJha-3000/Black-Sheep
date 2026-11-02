@@ -9,4 +9,3 @@ export * from './portfolio';
 export * from './events';
 export * from './rival';
 export * from './rivalLLM';
-export * from './away';

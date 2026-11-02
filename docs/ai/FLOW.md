@@ -73,23 +73,3 @@ Entry: `packages/engine/src/rivalLLM.ts → makeLLMDecision(input, endpoint?)`
 Assumptions: the fallback twin returns a valid, executable decision.
 Side effects: one API call per fired decision (gated upstream).
 Fragile: if the model ID is ever retired, every call 404s and the rival silently plays rule-based — check the console warning.
-
-## Away-summary re-engagement (Phase 4 — "while you were away")
-Entry: `server/away.ts → GET /rooms/:code/away-summary?since=<ms epoch>`
-
-1. Authenticate + resolve caller's Fund for the room
-2. Clamp `since` to `now`; find nearest `MarketTick` snapshot at or before `since` (fallback: current prices)
-3. Reconstruct NAV-then from snapshot prices + fund cash; NAV-now from live market
-4. `positionDeltas(rows, priceThen, priceNow)` — per-position PnL excursion (shared engine math)
-5. `relevantEvents(events, heldTickers)` — only events on held tickers (never the full firehose)
-6. `confrontationsDuringAway(heldPositions, rivalDecisions)` — replays logged rival decisions through `detectConfrontation`
-7. `isNotable(summary)` — window ≥2min AND (NAV moved ≥$25K OR position moved ≥$10K OR confrontation)
-8. Return `{ ...summary, notable }` — client only stores when `notable: true`
-
-Assumptions: `since` is client-supplied (stateless); snapshot cadence bounds reconstruction accuracy.
-Side effects: read-only (no writes).
-Fragile: the endpoint trusts the client's `since` — a skewed clock widens/narrowers the window (acceptable for V1; `isNotable` is the real protection).
-
-Client flow: `enterRoom()` → `fetchAwaySummary(roomCode)` → GET with `since = session.lastSeenAt` → store only if `notable` → `AwaySummary.tsx` renders over terminal → "ENTER TERMINAL" → `dismissAwaySummary()`.
-
-

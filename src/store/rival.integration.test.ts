@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useGameStore } from './gameStore';
 
 // NOTE (Phase 4): the old integration tests drove the REMOVED local tick loop
@@ -39,5 +39,24 @@ describe('rival integration (store wiring)', () => {
     expect(s.buy).toBeUndefined();
     expect(s.short).toBeUndefined();
     expect(s.closePosition).toBeUndefined();
+  });
+
+  it('carries no away-summary state or actions', () => {
+    const s = useGameStore.getState() as unknown as Record<string, unknown>;
+    expect('awaySummary' in s).toBe(false);
+    expect(s.fetchAwaySummary).toBeUndefined();
+    expect(s.dismissAwaySummary).toBeUndefined();
+  });
+
+  it('restores a legacy persisted session that still has lastSeenAt', async () => {
+    localStorage.setItem(
+      'black_sheep_session',
+      JSON.stringify({ token: 't', user: { id: 1, email: 'a@b.c' }, roomCode: 'ABC234', lastSeenAt: 1 }),
+    );
+    vi.resetModules();
+    const { useGameStore: fresh } = await import('./gameStore');
+    expect(fresh.getState().token).toBe('t');
+    expect(fresh.getState().roomCode).toBe('ABC234');
+    localStorage.clear();
   });
 });

@@ -176,13 +176,6 @@ roomsRouter.get('/:code/state', wrap(async (req, res) => {
 
   const w = await ensureWorld(room.id);
 
-  // Stamp lastSeenAt so a later rejoin can compute "what happened while you
-  // were away". Fire-and-forget: this is a pure bookkeeping write and must
-  // never delay (or break) the state response the poll is waiting on.
-  void prisma.fund
-    .update({ where: { id: myFund.id }, data: { lastSeenAt: new Date() } })
-    .catch(() => undefined);
-
   // Every fund's NAV + AGGREGATE exposure only — this is the multiplayer
   // version of the information firewall: NAV is public (it's the scoreboard),
   // books are not.

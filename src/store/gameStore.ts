@@ -19,8 +19,6 @@ export interface GameSession {
   token: string;
   user: { id: number; email: string };
   roomCode: string;
-  /** ms epoch of the last /state poll — drives the away-summary on rejoin. */
-  lastSeenAt: number;
 }
 
 export interface GameStoreState {
@@ -61,9 +59,6 @@ export interface GameStoreState {
   confrontation: ConfrontationEvent | null;
   contested: Ticker[];
   rivalDecisionKey: string;
-  awaySummary: unknown | null;
-  /** ms epoch of the last /state poll — drives the away-summary fetch on rejoin. */
-  lastSeenAt: number;
   liquidated: boolean;
   causeOfDeath: string;
   /** Server-computed cause from the latest LiquidationLog (null when alive). */
@@ -88,10 +83,8 @@ export interface GameStoreState {
   // --- UI actions ---
   selectTicker: (ticker: Ticker) => void;
   dismissConfrontation: () => void;
-  // --- poll / away ---
+  // --- poll ---
   poll: () => Promise<void>;
-  fetchAwaySummary: (roomCode: string) => Promise<void>;
-  dismissAwaySummary: () => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -110,7 +103,6 @@ function loadSession(): GameSession | null {
       token: parsed.token,
       user: parsed.user,
       roomCode: parsed.roomCode,
-      lastSeenAt: typeof parsed.lastSeenAt === 'number' ? parsed.lastSeenAt : Date.now(),
     };
   } catch {
     return null;
@@ -146,7 +138,6 @@ const _initSession = loadSession();
 const _initPhase: Phase = _initSession ? 'lobby' : 'auth';
 const _initCompanies = seedMarket();
 const _initFund = SEED_FUND;
-const _initAwaySummary = null;
 
 export const useGameStore = create<GameStoreState>((set, get) => ({
   phase: _initPhase,
@@ -184,8 +175,6 @@ export const useGameStore = create<GameStoreState>((set, get) => ({
   confrontation: null,
   contested: [],
   rivalDecisionKey: '',
-  awaySummary: _initAwaySummary ?? null,
-  lastSeenAt: _initSession ? _initSession.lastSeenAt : Date.now(),
   liquidated: false,
   causeOfDeath: '',
   liquidationCause: null,
@@ -203,7 +192,7 @@ export const useGameStore = create<GameStoreState>((set, get) => ({
       method: 'POST',
       body: { email: email.trim(), password },
     });
-    const session: GameSession = { token: data.token, user: data.user, roomCode: '', lastSeenAt: Date.now() };
+    const session: GameSession = { token: data.token, user: data.user, roomCode: '' };
     saveSession(session);
     set({ phase: 'lobby', token: data.token, user: data.user, roomCode: '', error: '' });
   },
@@ -212,7 +201,7 @@ export const useGameStore = create<GameStoreState>((set, get) => ({
       method: 'POST',
       body: { email: email.trim(), password },
     });
-    const session: GameSession = { token: data.token, user: data.user, roomCode: '', lastSeenAt: Date.now() };
+    const session: GameSession = { token: data.token, user: data.user, roomCode: '' };
     saveSession(session);
     set({ phase: 'lobby', token: data.token, user: data.user, roomCode: '', error: '' });
   },
@@ -235,7 +224,6 @@ export const useGameStore = create<GameStoreState>((set, get) => ({
       roomCode: '',
       error: '',
       fund: SEED_FUND,
-      awaySummary: null,
       confrontation: null,
       contested: [],
       liquidated: false,
@@ -243,12 +231,9 @@ export const useGameStore = create<GameStoreState>((set, get) => ({
   },
   enterRoom: (roomCode: string) => {
     set({ phase: 'trading', roomCode, error: '' });
-    // Fire the away-summary fetch after entering — non-blocking. The screen
-    // shows only when the window was long AND something notable happened.
-    void get().fetchAwaySummary(roomCode);
   },
   leaveRoom: () => {
-    set({ phase: 'lobby', roomCode: '', awaySummary: null, confrontation: null, contested: [], liquidated: false });
+    set({ phase: 'lobby', roomCode: '', confrontation: null, contested: [], liquidated: false });
   },
   restart: () => {
     clearSession();
@@ -260,7 +245,6 @@ export const useGameStore = create<GameStoreState>((set, get) => ({
       error: '',
       companies: seedMarket(),
       fund: SEED_FUND,
-      awaySummary: null,
       confrontation: null,
       contested: [],
       liquidated: false,
@@ -269,25 +253,6 @@ export const useGameStore = create<GameStoreState>((set, get) => ({
       rivalHistory: [],
     });
   },
-  fetchAwaySummary: async (roomCode: string) => {
-    const { token, lastSeenAt } = get();
-    if (!token) return;
-    try {
-      const since = lastSeenAt > 0 ? lastSeenAt : Date.now();
-      const res = await apiFetch<{ notable: boolean } & Record<string, unknown>>(
-        `/rooms/${roomCode}/away-summary?since=${since}`,
-        { token },
-      );
-      // Only store the summary if it passes the notable gate — otherwise the
-      // screen would show on every refresh and train players to dismiss it.
-      if (res.notable) {
-        set({ awaySummary: res });
-      }
-    } catch {
-      // Away summary is best-effort — never break the rejoin over it.
-    }
-  },
-  dismissAwaySummary: () => set({ awaySummary: null }),
   setError: (error: string) => set({ error }),
   clearError: () => set({ error: '' }),
   dismissConfrontation: () => set({ confrontation: null }),
@@ -311,15 +276,6 @@ export const useGameStore = create<GameStoreState>((set, get) => ({
         rivalDecisionKey,
       };
       const p = projectState(raw, prev);
-
-      // Stamp lastSeenAt on every successful poll — this is the timestamp the
-      // away-summary endpoint uses as the window start on rejoin.
-      const now = Date.now();
-      const session = loadSession();
-      if (session) {
-        session.lastSeenAt = now;
-        saveSession(session);
-      }
 
       set({
         fundId: p.fundId,
@@ -358,7 +314,6 @@ export const useGameStore = create<GameStoreState>((set, get) => ({
         confrontation: p.confrontation,
         contested: p.contested,
         rivalDecisionKey: p.rivalDecisionKey,
-        lastSeenAt: now,
       });
     } catch {
       // silent — next poll retries
