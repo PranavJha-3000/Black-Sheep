@@ -1,5 +1,4 @@
-﻿import { detectConfrontation } from '@black-sheep/engine/rival';
-import type { ConfrontationEvent, RivalAction, RivalFund, RivalLastDecision } from '@black-sheep/engine/rival';
+﻿import type { RivalAction, RivalFund, RivalLastDecision } from '@black-sheep/engine/rival';
 import { peakNav } from '@black-sheep/engine/portfolio';
 import type { Fund } from '@black-sheep/engine/portfolio';
 import type { Company, Direction, MarketEvent, MarketEventType, Position, Ticker } from '@black-sheep/engine/types';
@@ -13,11 +12,9 @@ import type { RiskLabel } from './derive';
  * The mapper is the separator between "what the server sends" and "what the
  * terminal renders". It exists so the whole multiplexer is unit-testable
  * without a network: feed it a state JSON and a snapshot of the previous
- * projection, get back the patches — including the Phase-2 confrontation
- * ("Billions moment") detection and the contested fight markers, which were
- * local store logic before and are re-derived here from the rival's persisted
- * decision telemetry (the information firewall stays intact: we never learn
- * the rival's actual book).
+ * projection, get back the patches. The rival's last decision is re-derived
+ * from its persisted decision telemetry (the information firewall stays
+ * intact: we never learn the rival's actual book).
  */
 
 // ---------------------------------------------------------------------------
@@ -61,7 +58,6 @@ export interface ApiRoomState {
     positions: ApiPosition[];
     liquidated: boolean;
     liquidationCause: string | null;
-    liquidationRivalContext: string | null;
   };
   flow: Record<string, number>;
   rival: {
@@ -84,9 +80,6 @@ export interface ApiRoomState {
 export interface ProjectionPrev {
   priceHistory: Record<Ticker, number[]>;
   navHistory: number[];
-  rivalHistory: number[];
-  contested: Ticker[];
-  confrontation: ConfrontationEvent | null;
   rivalDecisionKey: string;
 }
 
@@ -116,17 +109,13 @@ export interface Projection {
   peakNav: number;
   liquidated: boolean;
   liquidationCause: string | null;
-  liquidationRivalContext: string | null;
   priceHistory: Record<Ticker, number[]>;
   navHistory: number[];
   rivalNav: number;
-  rivalHistory: number[];
   rivalFund: RivalFund;
   rivalThinking: boolean;
   events: MarketEvent[];
   flow: Record<string, number>;
-  confrontation: ConfrontationEvent | null;
-  contested: Ticker[];
   rivalDecisionKey: string;
 }
 
@@ -174,11 +163,6 @@ export function projectState(raw: ApiRoomState, prev: ProjectionPrev): Projectio
 // --- rival (display projection only — the real book stays on the server) ---
   const rivalRow = raw.funds.find((f) => f.userId === null);
   const rivalNav = Math.max(1, rivalRow?.nav ?? raw.me.startingCapital);
-  const rivalHistory = [...prev.rivalHistory, rivalNav].slice(-HISTORY_CAP);
-
-  // --- confrontation detection (the "Billions moment") ----------------------
-  let confrontation = prev.confrontation;
-  let contested = prev.contested;
 
   let lastDecision: RivalLastDecision | null = null;
   let rivalDecisionKey = prev.rivalDecisionKey;
@@ -197,28 +181,7 @@ export function projectState(raw: ApiRoomState, prev: ProjectionPrev): Projectio
       realizedPnL: rawDecision.realizedPnL ?? undefined,
     };
     rivalDecisionKey = `${rawDecision.at}|${lastDecision.action}|${lastDecision.ticker ?? ''}`;
-
-    // Detect ONLY on a brand-new decision, and only when it actually executed
-    // (execution telemetry exists) — a rejected trade never banners a fight
-    // that isn't real. Mirrors the Phase-2 store glue exactly.
-    if (rivalDecisionKey !== prev.rivalDecisionKey) {
-      const opened =
-        (lastDecision.action === 'buy' || lastDecision.action === 'short') && lastDecision.fillPrice !== undefined;
-      const closedOut = lastDecision.action === 'close' && lastDecision.realizedPnL !== undefined;
-      if (opened || closedOut) {
-        const evt = detectConfrontation(fund.positions, lastDecision);
-        // 'opposite' announces once per episode; 'rival_win' may escalate.
-        if (evt && (evt.kind === 'rival_win' || !contested.includes(evt.ticker))) {
-          confrontation = evt;
-          if (!contested.includes(evt.ticker)) contested = [...contested, evt.ticker];
-        }
-      }
-    }
   }
-
-  // The fight marker lives only while you still hold the name.
-  const held = new Set(fund.positions.map((p) => p.ticker));
-  contested = contested.filter((t) => held.has(t));
 
   const rivalFund: RivalFund = {
     // Only `lastDecision` holds real data; the numeric fields are inert
@@ -269,17 +232,13 @@ export function projectState(raw: ApiRoomState, prev: ProjectionPrev): Projectio
     peakNav: peakNav(fund),
     liquidated: raw.me.liquidated,
     liquidationCause: raw.me.liquidationCause,
-    liquidationRivalContext: raw.me.liquidationRivalContext,
     priceHistory,
     navHistory,
     rivalNav,
-    rivalHistory,
     rivalFund,
     rivalThinking: raw.rival.thinking ?? false,
     events,
     flow: raw.flow ?? {},
-    confrontation,
-    contested,
     rivalDecisionKey,
   };
 }

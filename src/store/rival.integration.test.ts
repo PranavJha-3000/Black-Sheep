@@ -4,7 +4,7 @@ import { useGameStore } from './gameStore';
 // NOTE (Phase 4): the old integration tests drove the REMOVED local tick loop
 // (store.tick + local rival brain). The store is now a server projection:
 // these tests pin the offline/seeded initial state only. Live rival behavior
-// is covered by stateMapper tests (wire → confrontation) plus the server-side
+// is covered by stateMapper tests (wire → projection) plus the server-side
 // world tests.
 
 
@@ -31,14 +31,6 @@ describe('rival integration (store wiring)', () => {
     expect(s.rivalThinking).toBe(false);
   });
 
-  it('restart clears confrontation state entirely', () => {
-    useGameStore.getState().restart();
-    const r = useGameStore.getState();
-    expect(r.confrontation).toBeNull();
-    expect(r.contested).toEqual([]);
-    expect(r.rivalThinking).toBe(false);
-  });
-
   it('is observer-only: the store exposes no trading actions', () => {
     const s = useGameStore.getState() as unknown as Record<string, unknown>;
     expect(s.buy).toBeUndefined();
@@ -51,6 +43,13 @@ describe('rival integration (store wiring)', () => {
     expect('awaySummary' in s).toBe(false);
     expect(s.fetchAwaySummary).toBeUndefined();
     expect(s.dismissAwaySummary).toBeUndefined();
+  });
+
+  it('carries no player-vs-rival state', () => {
+    const s = useGameStore.getState() as unknown as Record<string, unknown>;
+    for (const k of ['confrontation', 'contested', 'dismissConfrontation', 'rivalHistory', 'liquidationRivalContext']) {
+      expect(k in s).toBe(false);
+    }
   });
 
   it('restores a legacy persisted session that still has lastSeenAt', async () => {

@@ -5,15 +5,11 @@ import TopBar from "./TopBar";
 import Hero from "./Hero";
 import Mid from "./Mid";
 import Foot from "./Foot";
-import LiquidationScreen from "./LiquidationScreen";
 import ExposureWarning from "./ExposureWarning";
 import RivalPanel from "./RivalPanel";
-import HeadToHead from "./HeadToHead";
-import ConfrontationBanner from "./ConfrontationBanner";
 import FundSummaryPanel from "./FundSummaryPanel";
 import { useGameStore } from "../store/gameStore";
 export default function Terminal() {
-  const liquidated = useGameStore((s) => s.liquidated);
   useEffect(() => {
     // V1 sync loop: poll the server every ~2.5s. The server is the source of
     // truth; each poll reconciles optimistic local fills with authoritative
@@ -41,7 +37,6 @@ export default function Terminal() {
       </aside>
       <div className="relative flex min-w-0 flex-1 flex-col">
         <TopBar />
-        <ConfrontationBanner />
         <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-2">
           <Ticker />
           <ExposureWarning />
@@ -51,13 +46,11 @@ export default function Terminal() {
             <div className="col-span-12 min-h-[260px]"><StockChart /></div>
           </div>
           <div className="grid grid-cols-12 gap-2 pb-1">
-            <div className="col-span-4"><RivalPanel /></div>
-            <div className="col-span-8"><HeadToHead /></div>
+            <div className="col-span-12"><RivalPanel /></div>
           </div>
         </div>
         <Foot />
       </div>
-      {liquidated && <LiquidationScreen />}
     </div>
   );
 }

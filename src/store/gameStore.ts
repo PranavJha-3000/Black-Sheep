@@ -6,7 +6,6 @@ import { createFund } from '@black-sheep/engine/portfolio';
 import type { Fund } from '@black-sheep/engine/portfolio';
 import type { RiskLabel } from './derive';
 import type { Ticker, Company, MarketEvent } from '@black-sheep/engine/types';
-import type { ConfrontationEvent } from '@black-sheep/engine/rival';
 import type { RivalFund } from '@black-sheep/engine/rival';
 import { apiFetch } from './api';
 import { projectState } from './stateMapper';
@@ -56,18 +55,12 @@ export interface GameStoreState {
   rivalThinking: boolean;
   events: MarketEvent[];
   flow: Record<Ticker, number>;
-  confrontation: ConfrontationEvent | null;
-  contested: Ticker[];
   rivalDecisionKey: string;
   liquidated: boolean;
-  causeOfDeath: string;
   /** Server-computed cause from the latest LiquidationLog (null when alive). */
   liquidationCause: string | null;
-  /** Rival context line from the latest LiquidationLog (null when irrelevant). */
-  liquidationRivalContext: string | null;
   priceHistory: Record<Ticker, number[]>;
   navHistory: number[];
-  rivalHistory: number[];
   selectedTicker: Ticker;
   // --- session / room actions ---
   login: (email: string, password: string) => Promise<void>;
@@ -82,7 +75,6 @@ export interface GameStoreState {
   setError: (error: string) => void;
   // --- UI actions ---
   selectTicker: (ticker: Ticker) => void;
-  dismissConfrontation: () => void;
   // --- poll ---
   poll: () => Promise<void>;
 }
@@ -172,16 +164,11 @@ export const useGameStore = create<GameStoreState>((set, get) => ({
   rivalThinking: false,
   events: [],
   flow: {},
-  confrontation: null,
-  contested: [],
   rivalDecisionKey: '',
   liquidated: false,
-  causeOfDeath: '',
   liquidationCause: null,
-  liquidationRivalContext: null,
   priceHistory: {},
   navHistory: [],
-  rivalHistory: [],
   selectedTicker: 'NOVA' as Ticker,
   // ---------------------------------------------------------------------------
   // Actions
@@ -224,8 +211,6 @@ export const useGameStore = create<GameStoreState>((set, get) => ({
       roomCode: '',
       error: '',
       fund: SEED_FUND,
-      confrontation: null,
-      contested: [],
       liquidated: false,
     });
   },
@@ -233,7 +218,7 @@ export const useGameStore = create<GameStoreState>((set, get) => ({
     set({ phase: 'trading', roomCode, error: '' });
   },
   leaveRoom: () => {
-    set({ phase: 'lobby', roomCode: '', confrontation: null, contested: [], liquidated: false });
+    set({ phase: 'lobby', roomCode: '', liquidated: false });
   },
   restart: () => {
     clearSession();
@@ -245,21 +230,17 @@ export const useGameStore = create<GameStoreState>((set, get) => ({
       error: '',
       companies: seedMarket(),
       fund: SEED_FUND,
-      confrontation: null,
-      contested: [],
       liquidated: false,
       priceHistory: {},
       navHistory: [],
-      rivalHistory: [],
     });
   },
   setError: (error: string) => set({ error }),
   clearError: () => set({ error: '' }),
-  dismissConfrontation: () => set({ confrontation: null }),
   selectTicker: (ticker: Ticker) => set({ selectedTicker: ticker }),
   poll: async () => {
     try {
-      const { phase, token, roomCode, priceHistory, navHistory, rivalHistory, contested, confrontation, rivalDecisionKey } = get();
+      const { phase, token, roomCode, priceHistory, navHistory, rivalDecisionKey } = get();
       if (phase !== 'trading' || !token || !roomCode) return;
 
       const raw = await apiFetch<Parameters<typeof projectState>[0]>(
@@ -270,9 +251,6 @@ export const useGameStore = create<GameStoreState>((set, get) => ({
       const prev: ProjectionPrev = {
         priceHistory,
         navHistory,
-        rivalHistory,
-        contested,
-        confrontation,
         rivalDecisionKey,
       };
       const p = projectState(raw, prev);
@@ -300,19 +278,14 @@ export const useGameStore = create<GameStoreState>((set, get) => ({
         liquidationAt: p.liquidationAt,
         peakNav: p.peakNav,
         liquidated: p.liquidated,
-        causeOfDeath: p.liquidationCause ?? '',
         liquidationCause: p.liquidationCause,
-        liquidationRivalContext: p.liquidationRivalContext,
         priceHistory: p.priceHistory,
         navHistory: p.navHistory,
         rivalNav: p.rivalNav,
-        rivalHistory: p.rivalHistory,
         rivalFund: p.rivalFund,
         rivalThinking: p.rivalThinking,
         events: p.events,
         flow: p.flow,
-        confrontation: p.confrontation,
-        contested: p.contested,
         rivalDecisionKey: p.rivalDecisionKey,
       });
     } catch {
