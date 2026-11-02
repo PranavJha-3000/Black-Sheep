@@ -1,3 +1,4 @@
+import { MODEL_REGISTRY } from '../../config/models';
 export function fmtMoney(n: number, dp = 0): string {
   const neg = n < 0;
   const v = Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: dp, maximumFractionDigits: dp });
@@ -18,3 +19,8 @@ export function sparkPath(values: number[], w: number, h: number, pad = 2): stri
   return values.map((v, i) => `${i === 0 ? 'M' : 'L'} ${(pad + i * step).toFixed(1)} ${(h - pad - ((v - min) / span) * (h - pad * 2)).toFixed(1)}`).join(' ');
 }
 export function tickersOf(companies: Record<string, { ticker: string }>): string[] { return Object.keys(companies); }
+/** A model id's display name; 'UNREGISTERED' for funds outside the registry. */
+export function modelName(model: string | null): string {
+  if (!model) return 'UNREGISTERED';
+  return MODEL_REGISTRY[model as keyof typeof MODEL_REGISTRY]?.displayName ?? model;
+}
