@@ -145,6 +145,20 @@ export const ANALYTICS_EVENT_LIMIT = 500;
 /** ANALYTICS is aggregate and DB-heavy: refetched at most this often while open. */
 export const ANALYTICS_POLL_MS = 15_000;
 
+// --- Research Lab: controlled experiment worlds (VISION §10, D-032) ---
+/** Longest experiment world, in engine ticks. */
+export const EXPERIMENT_MAX_TICKS = 5000;
+/** Most seeds (paired runs) per experiment. */
+export const EXPERIMENT_MAX_SEEDS = 10;
+/** Most arms (values of the varied variable) per experiment. */
+export const EXPERIMENT_MAX_ARMS = 6;
+/** NAV points kept per fund per arm for charts (the first seed's run). */
+export const EXPERIMENT_SERIES_POINTS = 200;
+/** How often the runner looks for a queued experiment. */
+export const EXPERIMENT_POLL_MS = 2_000;
+/** RESEARCH LAB list/detail refetch interval while the view is open. */
+export const LAB_POLL_MS = 5_000;
+
 // --- World Director (packages/engine/src/director.ts, server/world.ts) ---
 /** 'none' | 'rule' | 'jev'. The DIRECTOR_MODE env var overrides it; 'jev' acts as 'none' until the Jev adapter is configured. */
 export const DIRECTOR_MODE = 'rule';
@@ -154,11 +168,16 @@ export const DIRECTOR_EVERY_TICKS = 10;
 export const DIRECTOR_OFFSET = 9;
 /** Minimum ticks between two interventions. */
 export const DIRECTOR_COOLDOWN_TICKS = 60;
-/** Ticks without any market event before the market counts as quiet. */
-export const DIRECTOR_QUIET_TICKS = 30;
-/** Mean |daily change| below which the market counts as calm (fraction). */
-export const DIRECTOR_CALM_ABS_CHANGE = 0.01;
-/** Mean |daily change| above which the market is already stressed: never intervene (fraction). */
-export const DIRECTOR_HOT_ABS_CHANGE = 0.05;
-/** A quiet market that has run up at least this much (mean daily change) gets tightening. */
-export const DIRECTOR_RUNUP_CHANGE = 0.02;
+// Calibrated from 12k simulated ticks (Stage 8, D-029 revisit): ambient events
+// fire every ~5 ticks and prices sit 7–14% from their mean-reversion anchor,
+// so the original 30-tick / 1% / 5% thresholds were never met.
+/** Only events with |impact| at least this many percent reset the quiet clock. */
+export const DIRECTOR_MAJOR_EVENT_PCT = 5;
+/** Ticks without a major event before the market counts as quiet (~75th percentile gap). */
+export const DIRECTOR_QUIET_TICKS = 10;
+/** Mean |change from anchor| below which the market counts as calm (~25th percentile). */
+export const DIRECTOR_CALM_ABS_CHANGE = 0.09;
+/** Mean |change from anchor| above which the market is already stressed: never intervene (~90th percentile). */
+export const DIRECTOR_HOT_ABS_CHANGE = 0.14;
+/** A quiet market whose mean change from anchor is at least this gets tightening (~90th percentile). */
+export const DIRECTOR_RUNUP_CHANGE = 0.035;

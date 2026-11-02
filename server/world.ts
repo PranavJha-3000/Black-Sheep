@@ -24,7 +24,7 @@ import {
 } from '@black-sheep/engine/rival';
 import { buildFundSystemPrompt, buildRivalUserMessage, shouldRivalReconsider } from '@black-sheep/engine/rivalLLM';
 import { runFundTool } from '@black-sheep/engine/fundTools';
-import { buildDirectorEvent, observeWorld, ruleDirector, validateIntervention, type DirectorDecision } from '@black-sheep/engine/director';
+import { buildDirectorEvent, isMajorEvent, observeWorld, ruleDirector, validateIntervention, type DirectorDecision } from '@black-sheep/engine/director';
 import {
   episodeFromDecision,
   episodeFromLiquidation,
@@ -303,7 +303,7 @@ async function loadLiveWorld(): Promise<World> {
 
   const lastIntervention = await prisma.directorDecisionLog.findFirst({ where: { worldId, applied: true }, orderBy: { id: 'desc' } });
   const director = {
-    lastEventTick: eventRows.find((r) => r.tickCountAt !== null)?.tickCountAt ?? null,
+    lastEventTick: eventRows.find((r) => r.tickCountAt !== null && isMajorEvent(r))?.tickCountAt ?? null,
     lastInterventionTick: lastIntervention?.tickCountAt ?? null,
   };
 
@@ -343,7 +343,7 @@ async function tickWorld(w: World): Promise<void> {
   for (const e of [evt, directorEvt]) {
     if (!e) continue;
     w.events = [e, ...w.events].slice(0, EVENT_BUFFER);
-    w.director.lastEventTick = next.tickCount;
+    if (isMajorEvent(e)) w.director.lastEventTick = next.tickCount;
     await prisma.marketEventLog.create({
       data: {
         worldId: w.worldId,
