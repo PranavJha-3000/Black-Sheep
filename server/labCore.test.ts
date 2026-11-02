@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { checkLabToken, parseExperimentRequest, runExperimentSpec } from './labCore';
+import { buildExperimentDetail, buildExperimentSummary, checkLabToken, parseExperimentRequest, runExperimentSpec, type ExperimentRow } from './labCore';
 
 const ALL = ['sterling-vale', 'halden-whitmore', 'crown-meridian'];
 const body = (over: Record<string, unknown> = {}) => ({
@@ -79,5 +79,36 @@ describe('runExperimentSpec', () => {
     expect(r.runs.map((a) => a.runs.map((x) => x.seed))).toEqual([[1, 2], [1, 2]]);
     expect(r.series[0].funds[0].navs.length).toBeGreaterThan(10);
     expect(JSON.stringify(r)).not.toMatch(/NaN|Infinity/);
+  });
+});
+
+describe('experiment payloads', () => {
+  const row: ExperimentRow = {
+    id: 3, createdAt: new Date('2026-11-02T10:00:00Z'), name: 'Director on/off', status: 'done', variable: 'directorMode',
+    specJson: JSON.stringify(body()), manifestJson: JSON.stringify({ configHash: 'abcd1234', seeds: [1, 2, 3], policyOnly: true }),
+    resultJson: JSON.stringify({ arms: [], series: [], runs: [] }), error: null,
+    startedAt: new Date('2026-11-02T10:00:01Z'), finishedAt: new Date('2026-11-02T10:00:03Z'),
+  };
+
+  it('the list summary carries no spec, manifest or result', () => {
+    expect(buildExperimentSummary(row)).toEqual({
+      id: 3, name: 'Director on/off', status: 'done', variable: 'directorMode', arms: 2, seeds: 3,
+      createdAt: '2026-11-02T10:00:00.000Z', finishedAt: '2026-11-02T10:00:03.000Z',
+    });
+  });
+
+  it('the detail parses the stored JSON, and a queued experiment has a null result', () => {
+    const d = buildExperimentDetail(row);
+    expect(d.spec).toEqual(body());
+    expect(d.manifest).toMatchObject({ configHash: 'abcd1234' });
+    expect(d.result).toEqual({ arms: [], series: [], runs: [] });
+    expect(buildExperimentDetail({ ...row, status: 'queued', resultJson: null }).result).toBeNull();
+  });
+
+  it('corrupt stored JSON degrades to null instead of throwing', () => {
+    const d = buildExperimentDetail({ ...row, resultJson: '{oops', specJson: 'nope' });
+    expect(d.result).toBeNull();
+    expect(d.spec).toBeNull();
+    expect(buildExperimentSummary({ ...row, specJson: 'nope' })).toMatchObject({ arms: 0, seeds: 0 });
   });
 });

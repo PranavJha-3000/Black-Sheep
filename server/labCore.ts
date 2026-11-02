@@ -9,6 +9,7 @@ import {
   type ArmComparison,
   type ArmConfig,
   type ExperimentSpec,
+  type ExperimentManifest,
   type ExperimentVariable,
   type RunResult,
 } from '@black-sheep/engine/experiment';
@@ -156,5 +157,74 @@ export async function runExperimentSpec(spec: ExperimentSpec, yieldFn: () => Pro
       label: a.label,
       runs: a.runs.map((r) => ({ seed: r.seed, digest: r.digest, liquidated: r.funds.filter((f) => f.liquidated).map((f) => f.key) })),
     })),
+  };
+}
+
+/** The stored Experiment row, as the route reads it. */
+export interface ExperimentRow {
+  id: number;
+  createdAt: Date;
+  name: string;
+  status: string;
+  variable: string;
+  specJson: string;
+  manifestJson: string;
+  resultJson: string | null;
+  error: string | null;
+  startedAt: Date | null;
+  finishedAt: Date | null;
+}
+
+export interface ExperimentSummary {
+  id: number;
+  name: string;
+  status: string;
+  variable: string;
+  arms: number;
+  seeds: number;
+  createdAt: string;
+  finishedAt: string | null;
+}
+
+export interface ExperimentDetail extends ExperimentSummary {
+  spec: ExperimentSpec | null;
+  manifest: ExperimentManifest | null;
+  result: ExperimentResult | null;
+  error: string | null;
+  startedAt: string | null;
+}
+
+/** Stored JSON is data: a corrupt column degrades to null, never a 500. */
+function parseJson<T>(json: string | null): T | null {
+  if (json === null) return null;
+  try {
+    return JSON.parse(json) as T;
+  } catch {
+    return null;
+  }
+}
+
+export function buildExperimentSummary(row: ExperimentRow): ExperimentSummary {
+  const spec = parseJson<ExperimentSpec>(row.specJson);
+  return {
+    id: row.id,
+    name: row.name,
+    status: row.status,
+    variable: row.variable,
+    arms: Array.isArray(spec?.values) ? spec.values.length : 0,
+    seeds: Array.isArray(spec?.seeds) ? spec.seeds.length : 0,
+    createdAt: row.createdAt.toISOString(),
+    finishedAt: row.finishedAt?.toISOString() ?? null,
+  };
+}
+
+export function buildExperimentDetail(row: ExperimentRow): ExperimentDetail {
+  return {
+    ...buildExperimentSummary(row),
+    spec: parseJson<ExperimentSpec>(row.specJson),
+    manifest: parseJson<ExperimentManifest>(row.manifestJson),
+    result: parseJson<ExperimentResult>(row.resultJson),
+    error: row.error,
+    startedAt: row.startedAt?.toISOString() ?? null,
   };
 }
