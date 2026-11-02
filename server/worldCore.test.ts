@@ -6,6 +6,7 @@ import {
   parseWorldSnapshot,
   resolveWorldSeed,
   shouldFundDecide,
+  singleFlight,
   type FundInput,
 } from './worldCore';
 
@@ -54,6 +55,48 @@ describe('worldCore', () => {
     it('fails loudly on a corrupt snapshot instead of starting a fresh market', () => {
       expect(() => parseWorldSnapshot('{')).toThrow(/corrupt world snapshot/);
       expect(() => parseWorldSnapshot('{"scheduler":{}}')).toThrow(/corrupt world snapshot/);
+    });
+
+    it('rejects a partly corrupt snapshot that would freeze the clock silently', () => {
+      const good = () => ({ market: createInitialMarket(), scheduler: initialScheduler() });
+      const cases: Array<(s: ReturnType<typeof good>) => void> = [
+        (s) => { (s.market as unknown as Record<string, unknown>).tickCount = undefined; },
+        (s) => { (s.market as unknown as Record<string, unknown>).timestamp = 'x'; },
+        (s) => { (s.market as unknown as Record<string, unknown>).recentFlow = null; },
+        (s) => { s.market.companies = {} as typeof s.market.companies; },
+        (s) => { s.market.companies.NOVA.price = Number.NaN; },
+        (s) => { (s.scheduler as unknown as Record<string, unknown>).nextFireTick = undefined; },
+      ];
+      for (const corrupt of cases) {
+        const s = good();
+        corrupt(s);
+        expect(() => parseWorldSnapshot(JSON.stringify(s))).toThrow(/corrupt world snapshot/);
+      }
+    });
+  });
+
+  describe('singleFlight', () => {
+    it('shares one in-flight load between concurrent callers', async () => {
+      let calls = 0;
+      const load = singleFlight(async () => {
+        calls += 1;
+        await Promise.resolve();
+        return { id: calls };
+      });
+      const [a, b] = await Promise.all([load(), load()]);
+      expect(calls).toBe(1);
+      expect(a).toBe(b);
+    });
+
+    it('allows a retry after a failed load', async () => {
+      let calls = 0;
+      const load = singleFlight(async () => {
+        calls += 1;
+        if (calls === 1) throw new Error('boom');
+        return calls;
+      });
+      await expect(load()).rejects.toThrow('boom');
+      await expect(load()).resolves.toBe(2);
     });
   });
 

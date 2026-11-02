@@ -5,7 +5,7 @@ Run before any change counts as done.
 | # | Command | Expected |
 |---|---|---|
 | 1 | `npm run typecheck` | exits 0 — runs root tsc (src + packages) AND `tsc -p server` |
-| 2 | `npm test` | all pass — currently 91 tests across 7 files (engine tests run from `packages/`) |
+| 2 | `npm test` | all pass — currently 94 tests across 7 files (engine tests run from `packages/`) |
 | 3 | `npm run lint` | exits 0 (`--max-warnings 0`; `_`-prefixed args are ignored by convention) |
 | 4 | `npm run build` | `tsc && vite build` succeeds |
 | 5 | `npm run server:dev` (needs DB) | `[world] clock started` + `[server] listening on :3001`; `GET /health` → `{"ok":true}` |

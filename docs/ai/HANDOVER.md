@@ -1,7 +1,7 @@
 # Handover
 
 ## Current state
-- Working: **Stage 2 global live world complete** (branch `feat/stage2-global-world`, unmerged). One persistent seeded world named `live` replaces rooms, lobby and per-room worlds (D-016). Humans observe via public `GET /world/state` with no account (D-017); the seed is persisted (D-018); every fund can be liquidated and then stops deciding (D-019). Pure rules live in `server/worldCore.ts` with unit tests. First init migration generated offline (`prisma/migrations/20261102000000_init`). 91/91 tests across 7 files. Stage 1 (repo cleanup) is merged to `main`.
+- Working: **Stage 2 global live world complete** (branch `feat/stage2-global-world`, unmerged). One persistent seeded world named `live` replaces rooms, lobby and per-room worlds (D-016). Humans observe via public `GET /world/state` with no account (D-017); the seed is persisted (D-018); every fund can be liquidated and then stops deciding (D-019). Pure rules live in `server/worldCore.ts` with unit tests. First init migration generated offline (`prisma/migrations/20261102000000_init`). 94/94 tests across 7 files. Stage 1 (repo cleanup) is merged to `main`.
 - In progress: nothing. Stage 3 (fund registry, ~3 AI funds) is next.
 - Broken: nothing known — typecheck, tests, lint and build green. Live-DB behaviour is UNVERIFIED (no Postgres).
 - Avoid: Do not duplicate engine logic — import `@black-sheep/engine/*`. Every async Express route goes through `wrap()`. Prisma pinned to v6. Never call an LLM from the browser (VISION §14.9) — `makeLLMDecision` has no default endpoint on purpose. Every field added to `buildWorldStatePayload` is public. Run ONE server process per DB.

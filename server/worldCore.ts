@@ -104,11 +104,46 @@ export function parseWorldSnapshot(json: string): { market: MarketState; schedul
   } catch {
     throw new Error('corrupt world snapshot');
   }
-  const snap = parsed as { market?: { companies?: unknown }; scheduler?: unknown } | null;
-  if (!snap || typeof snap !== 'object' || !snap.market?.companies || !snap.scheduler) {
-    throw new Error('corrupt world snapshot');
-  }
-  return snap as { market: MarketState; scheduler: SchedulerState };
+  if (!isValidSnapshot(parsed)) throw new Error('corrupt world snapshot');
+  return parsed;
+}
+
+const isFiniteNumber = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
+
+/**
+ * Deep enough to catch what would freeze the clock silently: a NaN tickCount
+ * never hits the snapshot/decision cadence, and a NaN price poisons every NAV.
+ */
+function isValidSnapshot(v: unknown): v is { market: MarketState; scheduler: SchedulerState } {
+  if (!v || typeof v !== 'object') return false;
+  const { market, scheduler } = v as { market?: Record<string, unknown>; scheduler?: Record<string, unknown> };
+  if (!market || typeof market !== 'object' || !scheduler || typeof scheduler !== 'object') return false;
+  if (!isFiniteNumber(market.tickCount) || !isFiniteNumber(market.timestamp)) return false;
+  if (!Array.isArray(market.recentFlow)) return false;
+  if (!isFiniteNumber(scheduler.nextFireTick)) return false;
+  const companies = market.companies;
+  if (!companies || typeof companies !== 'object') return false;
+  const list = Object.values(companies as Record<string, { price?: unknown }>);
+  return list.length > 0 && list.every((c) => c && isFiniteNumber(c.price));
+}
+
+/**
+ * Collapse concurrent calls into one in-flight load. A rejected load is
+ * forgotten so the next call retries; a resolved one is shared by all callers.
+ * Used by ensureLiveWorld so a poll and a tick racing on boot cannot each
+ * build their own World.
+ */
+export function singleFlight<T>(load: () => Promise<T>): () => Promise<T> {
+  let inFlight: Promise<T> | undefined;
+  return () => {
+    if (!inFlight) {
+      inFlight = load().catch((err: unknown) => {
+        inFlight = undefined;
+        throw err;
+      });
+    }
+    return inFlight;
+  };
 }
 
 /** A fund decides on the cadence tick, one call in flight, and never once liquidated. */

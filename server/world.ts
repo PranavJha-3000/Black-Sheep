@@ -32,6 +32,7 @@ import {
   realizedOfClosed,
   resolveWorldSeed,
   shouldFundDecide,
+  singleFlight,
 } from './worldCore';
 import {
   EVENT_BUFFER,
@@ -143,10 +144,12 @@ async function rebuildRivalFund(fundId: number, market: MarketState): Promise<Ri
 /**
  * Load the live world from persisted state, or bootstrap it on first boot.
  * A corrupt snapshot throws (parseWorldSnapshot) rather than silently starting
- * a fresh market over a world observers have been watching.
+ * a fresh market over a world observers have been watching. Concurrent callers
+ * (a tick and a poll on boot) share one load, so the world is never forked.
  */
-export async function ensureLiveWorld(): Promise<World> {
-  if (live) return live;
+export const ensureLiveWorld: () => Promise<World> = singleFlight(loadLiveWorld);
+
+async function loadLiveWorld(): Promise<World> {
 
   const envSeed = process.env.WORLD_SEED;
   let row = await prisma.world.findUnique({ where: { name: LIVE_WORLD_NAME } });
