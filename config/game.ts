@@ -130,3 +130,11 @@ export const MEMORY_PROMPT_ENTRIES = 6;
 /** recall_memory default and maximum result sizes. */
 export const MEMORY_RECALL_DEFAULT = 10;
 export const MEMORY_RECALL_MAX = 20;
+
+// --- Observer API (server/observerCore.ts) ---
+/** Tool-call JSON shown to observers is cut to this many characters. */
+export const OBSERVER_JSON_MAX = 2000;
+/** Decision traces returned per fund. */
+export const OBSERVER_TRACE_LIMIT = 20;
+/** Items in the activity feed. */
+export const OBSERVER_ACTIVITY_LIMIT = 40;
