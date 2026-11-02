@@ -65,10 +65,10 @@ Fragile: the two long `set({...})` calls are one-line-per-field — edits there 
 Entry: `packages/engine/src/rivalLLM.ts → makeLLMDecision(input, endpoint?)`
 
 1. Build body (`claude-sonnet-4-6`, `max_tokens: 300`, `RIVAL_SYSTEM_PROMPT`, user message from `buildRivalUserMessage`)
-2. `fetch(endpoint?.url ?? '/api/llm')` — browser: Vite proxy with server-side key; server: direct Anthropic URL with `x-api-key` header
+2. `fetch(endpoint.url)` — server only: direct Anthropic URL with `x-api-key` header (the endpoint is a required argument; the browser proxy was removed in Stage 1)
 3. `extractText` → `stripFences` (```json …```) → `firstJsonObject` → `JSON.parse` → `isRivalDecision` guard
 4. ANY failure (HTTP !ok, no text, no JSON, wrong shape, network) → `catch` → **`makeRandomDecision(input)`** — the game never stalls
-5. Without a key: client proxy returns 500 → fallback; server skips the call and uses the twin directly
+5. Without a key: server skips the call and uses the twin directly
 
 Assumptions: the fallback twin returns a valid, executable decision.
 Side effects: one API call per fired decision (gated upstream).

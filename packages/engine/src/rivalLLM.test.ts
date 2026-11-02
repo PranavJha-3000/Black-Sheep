@@ -4,6 +4,8 @@ import { createRivalFund, buildDecisionInput, makeRandomDecision } from './rival
 import { makeLLMDecision, shouldRivalReconsider, buildRivalUserMessage } from './rivalLLM';
 import type { RivalDecisionInput } from './rival';
 
+const ENDPOINT = { url: 'https://llm.test/v1/messages', headers: { 'x-api-key': 'test-key' } };
+
 function freshInput(): RivalDecisionInput {
   const market = createInitialMarket();
   market.timestamp = 20;
@@ -74,7 +76,7 @@ describe('rivalLLM', () => {
         json: async () => ({ content: [{ type: 'text', text: raw }] }),
       });
 
-      const decision = await makeLLMDecision(freshInput());
+      const decision = await makeLLMDecision(freshInput(), ENDPOINT);
       expect(decision.action).toBe('short');
       expect(decision.ticker).toBe('NOVA');
       expect(decision.dollarAmount).toBe(1_800_000);
@@ -89,14 +91,14 @@ describe('rivalLLM', () => {
         json: async () => ({ content: [{ type: 'text', text: raw }] }),
       });
 
-      const decision = await makeLLMDecision(freshInput());
+      const decision = await makeLLMDecision(freshInput(), ENDPOINT);
       expect(decision.action).toBe('buy');
       expect(decision.ticker).toBe('HELX');
     });
 
     it('falls back to the rule-based twin when fetch throws', async () => {
       (globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('network down'));
-      const decision = await makeLLMDecision(freshInput());
+      const decision = await makeLLMDecision(freshInput(), ENDPOINT);
       // Should still return a valid, executable decision (the twin's output).
       expect(['buy', 'short', 'close', 'hold']).toContain(decision.action);
       expect(decision.reasoning.length).toBeGreaterThan(0);
@@ -107,7 +109,7 @@ describe('rivalLLM', () => {
         ok: true,
         json: async () => ({ content: [{ type: 'text', text: 'not json at all' }] }),
       });
-      const decision = await makeLLMDecision(freshInput());
+      const decision = await makeLLMDecision(freshInput(), ENDPOINT);
       expect(['buy', 'short', 'close', 'hold']).toContain(decision.action);
     });
 
@@ -117,8 +119,20 @@ describe('rivalLLM', () => {
         status: 429,
         json: async () => ({}),
       });
-      const decision = await makeLLMDecision(freshInput());
+      const decision = await makeLLMDecision(freshInput(), ENDPOINT);
       expect(['buy', 'short', 'close', 'hold']).toContain(decision.action);
+    });
+
+    it('posts to the caller-supplied endpoint with merged headers (no browser default)', async () => {
+      const fetchMock = globalThis.fetch as unknown as ReturnType<typeof vi.fn>;
+      fetchMock.mockResolvedValue({
+        ok: true,
+        json: async () => ({ content: [{ type: 'text', text: '{"action":"hold","reasoning":"x","confidence":0.5}' }] }),
+      });
+      await makeLLMDecision(freshInput(), ENDPOINT);
+      const [url, init] = fetchMock.mock.calls[0];
+      expect(url).toBe('https://llm.test/v1/messages');
+      expect(init.headers).toMatchObject({ 'content-type': 'application/json', 'x-api-key': 'test-key' });
     });
   });
 

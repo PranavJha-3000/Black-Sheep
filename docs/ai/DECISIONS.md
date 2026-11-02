@@ -9,6 +9,7 @@
 **Revisit if:** A package boundary or bundler config ever enforces strict import zones (then add a path alias or workspace package).
 
 ### D-001 · 2026-09-12 · Claude (Cline)
+**Superseded 2026-11-02 by D-015** (browser LLM proxy removed; provider calls are server-only).
 **Decision:** Anthropic API key stays server-side; the browser calls same-origin `POST /api/llm`, and a Vite **plugin** (`llmProxyPlugin` in `vite.config.ts`) injects the key and forwards to `api.anthropic.com/v1/messages`.
 **Context:** No backend exists, but bundling `ANTHROPIC_API_KEY` into client JS would leak it to anyone opening DevTools.
 **Reasoning:** `loadEnv(mode, cwd, '')` reads the key in the dev server only; it never reaches `import.meta.env` or the bundle. The relay is ~40 lines and testable end-to-end.

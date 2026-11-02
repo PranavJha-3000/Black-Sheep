@@ -14,7 +14,6 @@
 | `prisma/schema.prisma` | Postgres schema: User, Room, Fund, Position, MarketTick, MarketEventLog, RivalDecisionLog | @prisma/client |
 | `src/store/gameStore.ts` | Client-only zustand store (Phase 1-2 single-player loop; Phase 4 will consume the server) | engine |
 | `src/components/*` | Terminal UI (Hero, Mid, RivalPanel, HeadToHead, ConfrontationBanner, PositionRow…) | gameStore |
-| `vite.config.ts` | Client dev server + `llmProxyPlugin` (browser → Anthropic relay) | Anthropic API |
 | `scripts/verify-backend.ps1` | One-command backend acceptance test (db → migrate → server → unattended tick growth) | docker, prisma, server |
 
 ## Data movement
@@ -24,7 +23,7 @@
 - **Fund.peakNav**: all-time high NAV, updated by the tick loop (`trackPeakNav`) (the post-trade `updatePeakNav` hook was removed with human trading in Stage 1). Drives the result-card "peak NAV" stat.
 - **Fund.liquidated**: boolean set server-authoritatively when `checkLiquidation` flags a margin breach. The client renders `LiquidationScreen` when true; closing the tab cannot dodge it.
 - **World process:** one in-memory `World` per active room (market + scheduler + rival fund); the loop mutates memory, persists snapshots/logs/rival deltas; a restart rebuilds from the latest snapshot + Fund/Position rows + last RivalDecisionLog entry.
-- **Secrets:** `ANTHROPIC_API_KEY` and `JWT_SECRET` live in `.env`, read server-side only. Browser path still goes through the Vite plugin proxy; server path calls Anthropic directly with the same key.
+- **Secrets:** `ANTHROPIC_API_KEY` and `JWT_SECRET` live in `.env`, read server-side only. Only the server calls the LLM provider (the Vite browser proxy was removed in Stage 1).
 
 ## Boundaries
 - **Information firewall (multiplayer version):** `GET /rooms/:code/state` returns every fund's `{nav, netExposure}` but positions/cash ONLY for the caller's own fund. The rival brain's `RivalDecisionInput` remains positions-free by construction.

@@ -3,8 +3,8 @@
  *
  * makeLLMDecision() is the async decision backend that plugs into the same
  * RivalDecisionInput / RivalDecision shell as makeRandomDecision(). It calls
- * Anthropic (via a Vite dev proxy that keeps the API key server-side - the
- * browser never sees it), parses the JSON response defensively, and FALLS BACK
+ * the provider endpoint the SERVER supplies (the API key never leaves the
+ * server), parses the JSON response defensively, and FALLS BACK
  * to makeRandomDecision() on any failure so the game never stalls on a hiccup.
  *
  * The system prompt is the craft: persona, the crowded-trade thesis, event
@@ -20,21 +20,9 @@ import type { RivalDecision, RivalDecisionInput } from './rival';
 // ---------------------------------------------------------------------------
 
 /**
- * The browser NEVER calls Anthropic directly. It hits this same-origin path;
- * the Vite dev server proxies it to api.anthropic.com and injects the key from
- * the server environment. In production this would be a tiny edge function.
- * Keeping the key off the client is non-negotiable: it is a secret, not a
- * config value, and bundling it would leak it to anyone who opens DevTools.
- */
-const LLM_PATH = '/api/llm';
-
-/**
- * Optional endpoint override for non-browser callers.
- *
- * The game server runs the SAME brain (same prompt, same parsing, same twin
- * fallback) but calls Anthropic directly - it already holds the key in its own
- * env, so there is no proxy hop. The browser path stays untouched: default
- * args keep hitting the same-origin /api/llm proxy.
+ * Provider endpoint, supplied by the server. Provider calls are server-only
+ * (VISION §14.9): the server holds the key in its own env and passes it here
+ * as a header. There is deliberately no browser default path.
  */
 export interface LLMEndpointOptions {
   /** Full URL to POST the Anthropic messages body to. */
@@ -198,7 +186,7 @@ function isRivalDecision(value: unknown): value is RivalDecision {
  */
 export async function makeLLMDecision(
   input: RivalDecisionInput,
-  endpoint?: LLMEndpointOptions,
+  endpoint: LLMEndpointOptions,
 ): Promise<RivalDecision> {
   const body = {
     model: 'claude-sonnet-4-6',
@@ -208,9 +196,9 @@ export async function makeLLMDecision(
   };
 
   try {
-    const res = await fetch(endpoint?.url ?? LLM_PATH, {
+    const res = await fetch(endpoint.url, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', ...(endpoint?.headers ?? {}) },
+      headers: { 'content-type': 'application/json', ...(endpoint.headers ?? {}) },
       body: JSON.stringify(body),
     });
     if (!res.ok) {

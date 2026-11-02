@@ -48,7 +48,7 @@ Run before any change counts as done.
 
 - [ ] Without `ANTHROPIC_API_KEY`: game still runs; rival reasons with templated rule-based text
 - [ ] With a key in `.env`: RivalPanel shows "APEX CAPITAL is reviewing positions..." then a 1–2 sentence LLM thesis
-- [ ] `curl -X POST localhost:5173/api/llm` with a junk body → Anthropic-shaped 401/400 passthrough (NOT a Vite 404)
+- ~~REMOVED Stage 1 (browser proxy gone)~~ `curl -X POST localhost:5173/api/llm` with a junk body → Anthropic-shaped 401/400 passthrough (NOT a Vite 404)
 - [ ] Restart mid-decision → no stale rival position resurrection
 - [ ] Confrontation: crowd a ticker → rival fades it → red banner + `⚔ APEX` on the row; close position → marker clears
 
