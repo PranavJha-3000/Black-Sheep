@@ -89,6 +89,18 @@ export const POLICY_AGGRESSIVE_EXTENDED = 0.03;
 /** Quant: net flow (dollars) below this magnitude is noise. */
 export const POLICY_QUANT_MIN_FLOW = 250_000;
 
+// --- Decision cycle & metering (server/budget.ts, server/providers) ---
+/** Hard cap on provider spend across all funds per UTC day, in USD. */
+export const GLOBAL_DAILY_BUDGET_USD = 10;
+/** At most this many provider calls in flight at once, across all funds. */
+export const MAX_CONCURRENT_LLM_CALLS = 2;
+/** Model rounds per decision (research rounds + the final submit). */
+export const MAX_TOOL_ROUNDS = 4;
+/** max_tokens per model round (covers thinking at low effort + the answer). */
+export const DECISION_MAX_TOKENS = 4096;
+/** Prompt size assumed when reserving budget before a call, in tokens. */
+export const DECISION_PROMPT_TOKENS_ESTIMATE = 3000;
+
 // --- Events (packages/engine/src/events.ts) ---
 /** Engine tick at which the first scripted event fires. */
 export const EVENT_FIRST_FIRE_TICK = 15;
