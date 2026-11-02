@@ -23,6 +23,14 @@ import {
 } from '@black-sheep/engine/rival';
 import { buildFundSystemPrompt, buildRivalUserMessage, shouldRivalReconsider } from '@black-sheep/engine/rivalLLM';
 import { runFundTool } from '@black-sheep/engine/fundTools';
+import {
+  episodeFromDecision,
+  episodeFromLiquidation,
+  reflect,
+  relationshipNote,
+  type MemoryEntry,
+  type MemoryKind,
+} from '@black-sheep/engine/memory';
 import { getFundProfileByName, type FundProfile } from '@black-sheep/engine/funds';
 import { decideByPolicy, enforceRiskLimit } from '@black-sheep/engine/policies';
 import type { MarketEvent, MarketState, Ticker } from '@black-sheep/engine/types';
@@ -48,6 +56,7 @@ import {
   GLOBAL_DAILY_BUDGET_USD,
   MAX_CONCURRENT_LLM_CALLS,
   MAX_TOOL_ROUNDS,
+  MEMORY_LOAD_LIMIT,
   LIVE_WORLD_NAME,
   SNAPSHOT_EVERY_TICKS,
   STARTING_CAPITAL,
@@ -79,6 +88,16 @@ const createMessage: CreateMessage | null = ANTHROPIC_API_KEY ? anthropicCreate(
 /** Every provider call reserves budget here first (VISION §12, D-025). */
 const ledger = new BudgetLedger(GLOBAL_DAILY_BUDGET_USD, MAX_CONCURRENT_LLM_CALLS);
 
+/** What the observer payload learns from a fund's live agent; a fund without one is observed only. */
+export function agentObservation(
+  agents: Agent[],
+  fundId: number,
+): { thinking: boolean; spend: { todayUsd: number; dailyBudgetUsd: number } | null; memory: MemoryEntry[] } {
+  const agent = agents.find((a) => a.fundId === fundId);
+  if (!agent) return { thinking: false, spend: null, memory: [] };
+  return { thinking: agent.pending && !agent.liquidated, spend: fundSpend(fundId, agent.profile), memory: agent.memory };
+}
+
 /** Today's spend vs budget for a registered fund, for the observer payload. */
 export function fundSpend(fundId: number, profile: FundProfile): { todayUsd: number; dailyBudgetUsd: number } {
   return { todayUsd: ledger.spentToday(fundId, new Date()), dailyBudgetUsd: profile.dailyBudgetUsd };
@@ -95,6 +114,8 @@ export interface Agent {
   liquidated: boolean;
   /** What the fund's model last saw; the material-change guard compares against it. */
   lastLlmInput: RivalDecisionInput | null;
+  /** The fund's newest memories, oldest first, capped at MEMORY_LOAD_LIMIT (D-026). */
+  memory: MemoryEntry[];
 }
 
 interface World {
@@ -252,6 +273,7 @@ async function loadLiveWorld(): Promise<World> {
       pending: false,
       liquidated: f.liquidated,
       lastLlmInput: null,
+      memory: await loadMemory(f.id),
     });
   }
 
@@ -417,6 +439,7 @@ async function liquidateFunds(w: World): Promise<void> {
     if (agent) {
       agent.fund = { ...agent.fund, cash: closed.cash, positions: closed.positions };
       agent.liquidated = true;
+      await remember(w, agent, [episodeFromLiquidation(cause, w.market.tickCount)]);
     }
 
     console.log(`[world] ${w.name} fund ${fund.id} LIQUIDATED — ${cause}`);
@@ -485,6 +508,57 @@ async function persistFundState(
       },
     }),
   ]);
+}
+
+/** A fund's newest persisted memories, oldest first. */
+async function loadMemory(fundId: number): Promise<MemoryEntry[]> {
+  const rows = await prisma.agentMemory.findMany({ where: { fundId }, orderBy: { id: 'desc' }, take: MEMORY_LOAD_LIMIT });
+  return rows.reverse().map((r) => ({
+    kind: r.kind as MemoryKind,
+    tickCountAt: r.tickCountAt,
+    subject: r.subject,
+    content: r.content,
+    importance: r.importance,
+    outcomeUsd: r.outcomeUsd,
+  }));
+}
+
+/**
+ * Append memories to a fund (in process and in Postgres). Never throws: a
+ * failed memory write must not undo or block the decision that caused it.
+ */
+async function remember(w: World, agent: Agent, entries: MemoryEntry[]): Promise<void> {
+  if (entries.length === 0) return;
+  agent.memory = [...agent.memory, ...entries].slice(-MEMORY_LOAD_LIMIT);
+  try {
+    await prisma.agentMemory.createMany({
+      data: entries.map((e) => ({ worldId: w.worldId, fundId: agent.fundId, ...e })),
+    });
+  } catch (err) {
+    console.error(`[world] ${agent.profile.name} memory write failed`, err);
+  }
+}
+
+/**
+ * EXPERIENCE → REMEMBER → REFLECT (VISION §6): the deciding fund records its
+ * filled trade (and reflects once enough closes accumulate); every other live
+ * fund holding that ticker records the public move as a relationship note.
+ */
+async function rememberDecision(w: World, agent: Agent, after: RivalFund, source: string): Promise<void> {
+  const tick = w.market.tickCount;
+  const episode = episodeFromDecision(after, markToMarket(after, w.market).nav, tick, source);
+  if (!episode) return;
+  const own: MemoryEntry[] = [episode];
+  const reflection = episode.outcomeUsd !== null ? reflect([...agent.memory, episode], tick) : null;
+  if (reflection) own.push(reflection);
+  await remember(w, agent, own);
+
+  if (!after.lastDecision) return;
+  for (const other of w.agents) {
+    if (other === agent || other.liquidated) continue;
+    const note = relationshipNote(other.fund.positions, agent.profile.name, after.lastDecision, tick);
+    if (note) await remember(w, other, [note]);
+  }
 }
 
 /** Where a decision came from, recorded on its RivalDecisionLog row (D-025). */
@@ -587,7 +661,7 @@ async function chooseDecision(
 /** One fund's decision pipeline: decide (outside the lock), then apply + persist (inside). */
 async function decideFund(w: World, agent: Agent): Promise<void> {
   const before = agent.fund;
-  const input = buildDecisionInput(before, w.market, w.events, w.market.recentFlow);
+  const input: RivalDecisionInput = { ...buildDecisionInput(before, w.market, w.events, w.market.recentFlow), memory: agent.memory };
   // The decision (and any model call) happens OUTSIDE the world lock. The
   // mutation and persistence below re-acquire the lock and re-read the
   // current market so a decision that resolved against stale prices is never
@@ -615,6 +689,7 @@ async function decideFund(w: World, agent: Agent): Promise<void> {
     w.market = market;
     agent.fund = after;
     await persistFundState(w, agent.fundId, before, after, decision, origin);
+    await rememberDecision(w, agent, after, origin.source);
   });
 }
 

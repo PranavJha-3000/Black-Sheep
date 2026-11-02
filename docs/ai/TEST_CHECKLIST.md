@@ -75,3 +75,10 @@ Run before any change counts as done.
 - [ ] (Needs DB, no key) `RivalDecisionLog.source = 'policy'` on every new row; no `LlmCallLog` rows
 - [ ] (Needs DB + key) a decision writes one `LlmCallLog` row (cost > 0) plus its `ToolCallLog` rows and a `RivalDecisionLog` with `source = 'llm'` and `llmCallId` set; once a fund's day spend nears $2 its rows show `source = 'budget'`
 - [ ] (Needs DB + key) restart mid-day → `/world/state` `spend.todayUsd` keeps the day's spend
+
+### Stage 5 — agent memory
+- [ ] `npm test` includes `packages/engine/src/memory.test.ts` and the recall_memory / prompt-memory / payload-memory tests
+- [ ] (Needs DB) `npx prisma migrate deploy` applies `20261102030000_agent_memory`; `\dt` shows `AgentMemory`
+- [ ] (Needs DB) after a fund's filled trade an `AgentMemory` row (kind `episodic`) appears; holds write none; after 3 closes a `reflective` row appears
+- [ ] (Needs DB) restart the server → `/world/state` `funds[].memory` still lists the same newest entries
+- [ ] (Needs DB) no `AgentMemory.content` of kind `relationship` contains a `$`

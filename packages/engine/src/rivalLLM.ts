@@ -9,6 +9,8 @@
  */
 
 import type { RivalDecision, RivalDecisionInput } from './rival';
+import { MEMORY_PROMPT_ENTRIES } from '../../../config/game';
+import { selectMemories } from './memory';
 import type { FundProfile } from './funds';
 
 // ---------------------------------------------------------------------------
@@ -76,6 +78,12 @@ export function buildRivalUserMessage(input: RivalDecisionInput): string {
         `  - [${e.type}${e.ticker ? ' ' + e.ticker : ''}${e.sector ? ' ' + e.sector : ''}] ${e.headline} (${e.priceImpactPercent > 0 ? '+' : ''}${e.priceImpactPercent}%)`,
       );
     }
+  }
+  const memories = selectMemories(input.memory ?? [], MEMORY_PROMPT_ENTRIES);
+  if (memories.length > 0) {
+    lines.push('');
+    lines.push('Your memory (persisted notes, not learned weights):');
+    for (const m of memories) lines.push(`  - [${m.kind} t=${m.tickCountAt}] ${m.content}`);
   }
   lines.push('');
   lines.push(`Aggregate flow lean: ${input.estimatedPlayerSectorExposure}.`);

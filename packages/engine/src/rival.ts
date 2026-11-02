@@ -12,6 +12,7 @@
  */
 
 import { openPosition, closePosition, availableCash, positionPnl } from './portfolio';
+import type { MemoryEntry } from './memory';
 import { getNetFlow } from './market';
 import type { Fund } from './portfolio';
 import type { Direction, MarketEvent, MarketState, Position, Sector, Ticker } from './types';
@@ -86,6 +87,8 @@ export interface RivalDecisionInput {
   events: MarketEvent[];
   market: { tickCount: number; timestamp: number };
   estimatedPlayerSectorExposure: PlayerSectorExposure;
+  /** The fund's own persisted memories, oldest first (Stage 5). Never another fund's. */
+  memory?: MemoryEntry[];
 }
 
 // ---------------------------------------------------------------------------

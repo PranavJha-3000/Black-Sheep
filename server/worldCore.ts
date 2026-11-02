@@ -1,4 +1,5 @@
 import { createInitialMarket, getNetFlow } from '@black-sheep/engine/market';
+import type { MemoryEntry } from '@black-sheep/engine/memory';
 import { FUND_PROFILES, getFundProfileByName, type FundProfile } from '@black-sheep/engine/funds';
 import { getExposure, INITIAL_MARGIN_RATE, markToMarket } from '@black-sheep/engine/portfolio';
 import type { Fund } from '@black-sheep/engine/portfolio';
@@ -233,6 +234,17 @@ export interface ObservedProfile {
   model: string;
 }
 
+/** A memory as observers see it (VISION §7, §13). */
+export interface ObservedMemory {
+  kind: string;
+  tickCountAt: number;
+  subject: string | null;
+  content: string;
+}
+
+/** Memories per fund in the public payload. */
+const OBSERVED_MEMORY_COUNT = 5;
+
 export interface ObservedFund {
   id: number;
   name: string;
@@ -250,6 +262,8 @@ export interface ObservedFund {
   thinking: boolean;
   positions: ObservedPosition[];
   lastDecision: ObservedDecision | null;
+  /** The fund's newest memories, newest first. */
+  memory: ObservedMemory[];
 }
 
 export interface ObservedEvent {
@@ -280,6 +294,8 @@ export interface FundInput {
   liquidationCause: string | null;
   thinking: boolean;
   spend?: ObservedSpend | null;
+  /** The fund's memories, oldest first (agents only). */
+  memory?: MemoryEntry[];
   openPositions: PositionRow[];
   lastDecision: {
     action: string;
@@ -356,6 +372,10 @@ export function buildWorldStatePayload(
             }
           : null,
         spend: f.spend ? { todayUsd: f.spend.todayUsd, dailyBudgetUsd: f.spend.dailyBudgetUsd } : null,
+        memory: (f.memory ?? [])
+          .slice(-OBSERVED_MEMORY_COUNT)
+          .reverse()
+          .map((m) => ({ kind: m.kind, tickCountAt: m.tickCountAt, subject: m.subject, content: m.content })),
         cash: f.cash,
         startingCapital: f.startingCapital,
         nav: Math.max(1, markToMarket(ef, market).nav),

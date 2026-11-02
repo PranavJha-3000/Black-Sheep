@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { prisma } from './db';
 import { wrap } from './auth';
-import { ensureLiveWorld, fundSpend } from './world';
+import { agentObservation, ensureLiveWorld } from './world';
 import { buildWorldStatePayload, type FundInput } from './worldCore';
 
 /**
@@ -37,11 +37,7 @@ worldRouter.get(
         peakNav: f.peakNav,
         liquidated: f.liquidated,
         liquidationCause: liquidation?.cause ?? null,
-        thinking: w.agents.some((a) => a.fundId === f.id && a.pending && !a.liquidated),
-        spend: (() => {
-          const agent = w.agents.find((a) => a.fundId === f.id);
-          return agent ? fundSpend(f.id, agent.profile) : null;
-        })(),
+        ...agentObservation(w.agents, f.id),
         openPositions,
         lastDecision,
       });

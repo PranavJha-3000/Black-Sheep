@@ -26,6 +26,16 @@ describe('rivalLLM', () => {
       expect(msg).toContain('Your book');
       expect(msg.toLowerCase()).not.toContain('player');
     });
+
+    it('shows selected memories as persisted notes only when the fund has any', () => {
+      expect(buildRivalUserMessage(freshInput())).not.toContain('Your memory');
+      const msg = buildRivalUserMessage({
+        ...freshInput(),
+        memory: [{ kind: 'reflective', tickCountAt: 30, subject: null, content: 'Losses outweigh wins.', importance: 0.8, outcomeUsd: null }],
+      });
+      expect(msg).toContain('Your memory (persisted notes, not learned weights):');
+      expect(msg).toContain('[reflective t=30] Losses outweigh wins.');
+    });
   });
 
   describe('shouldRivalReconsider (cost guard)', () => {
