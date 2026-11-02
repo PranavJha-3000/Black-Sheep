@@ -1,12 +1,14 @@
 # Handover
 
 ## Current state
-- Working: **Stage 7 metrics, analytics and World Director complete** (branch `feat/stage7-metrics-director`). Pure evaluation metrics, per-fund NAV snapshots, `GET /world/analytics` and an ANALYTICS view (D-028); a World Director in the tick loop with `none`/`rule`/`jev` modes (default `rule`, env `DIRECTOR_MODE`) that can only fire validated sector/macro catalog events; the Jev adapter is a disabled stub (D-029). The observer has WORLD, FUNDS, FUND DETAIL, ACTIVITY and ANALYTICS views (D-027). Stages 1–6 are merged to `main`.
-- In progress: nothing. PAUSED for the user before Stage 8 (initial scope, Stages 3–7, complete).
+- Working: **Stage 8 Research Lab foundation complete** (branch `feat/stage8-research-lab`): controlled, policy-only experiment worlds that vary one variable across arms on paired seeds, with a reproducibility manifest, a runner beside the live world, `/lab` routes (create needs `LAB_ADMIN_TOKEN`) and a RESEARCH LAB view (D-032, D-033). The rule Director was recalibrated — it had never fired. Stage 7 (merged): Pure evaluation metrics, per-fund NAV snapshots, `GET /world/analytics` and an ANALYTICS view (D-028); a World Director in the tick loop with `none`/`rule`/`jev` modes (default `rule`, env `DIRECTOR_MODE`) that can only fire validated sector/macro catalog events; the Jev adapter is a disabled stub (D-029). The observer has WORLD, FUNDS, FUND DETAIL, ACTIVITY and ANALYTICS views (D-027). Stages 1–7 are merged to `main`; APEX CAPITAL is retired (D-030).
+- In progress: nothing.
 - Broken: nothing known — typecheck, tests, lint and build green. Live-DB and live-provider behaviour UNVERIFIED (no Postgres, no key used).
 - Avoid: Do not duplicate engine logic — import `@black-sheep/engine/*`. Every async Express route goes through `wrap()`. Prisma pinned to v6. Never call an LLM from the browser (VISION §14.9). Every field added to `buildWorldStatePayload` is public. Run ONE server process per DB. A fund's identity is its registry `name` — renaming an entry starts a new fund.
 
 ## Open items
+- [ ] **Policy funds die fast (found in Stage 8):** in experiment worlds HALDEN WHITMORE and CROWN MERIDIAN were margin-liquidated in every one of 10 seeded 2000-tick runs (often within 100–300 ticks), with or without the Director. The live world uses the same policies whenever there is no API key or the model is not woken. Tune the aggressive/quant policies' short sizing or margin buffer (VISION §6) — measurable now with a `funds` or cadence experiment.
+- [ ] Model-backed experiment arms and memory ablations (VISION §10): need the user's spend approval and a per-experiment budget; model calls must run outside any lock.
 - [ ] Stage 7 review minors (deferred): a crash between a Director event and the next snapshot leaves `DirectorDecisionLog.applied = true` for an event the restored market never had (cooldown blocks re-applying); macro events scale by `rateSensitivity` (up to 1.6), so one stock can move ~8%, not the 5% D-029 states; NAV metrics use the newest 2000 snapshots while turnover uses all-time notional (not stated in notes); max drawdown can exceed 100% after liquidation; `director.mode` is the current mode while counts span every mode ever run (group by mode); a failed `fundNavSnapshot.createMany` skips that tick's decision cycle; a failed analytics fetch keeps the stale payload silently; the snapshot-cadence note is hardcoded; the Director's "change" is distance from the mean-reversion anchor (`previousClose`, never rolled), not a daily change.
 - [ ] **Jev (Stage 7):** the adapter is a stub. Needs Jev's API URL, auth, response contract, pricing and usage reporting (VISION §8). When implemented: call it OUTSIDE the world lock, validate/apply inside, and meter its spend separately from the funds.
 - [ ] **Cost (Stage 4):** with a key, spend is capped at $2/fund/day and $10/day overall (`config/funds.ts`, `config/game.ts`). Never verified against a live key — first live run: watch `LlmCallLog` cost per call vs the ~$0.47 worst-case estimate.
@@ -25,6 +27,12 @@
 - [ ] Live-DB verification still blocked on WSL/Docker (`wsl --install -d Ubuntu`, reboot, then `scripts/verify-backend.ps1`). The init migration exists; run `npx prisma migrate deploy` (not `migrate dev --name init`, which would create a second migration) on first DB boot.
 
 ## Log
+
+### 2026-11-02 · Claude Opus 5.5 (Claude Code) · Stage 8 Research Lab foundation
+CHANGED: New engine `experiment.ts` (simulateWorld, arms, manifest, compareArms); `server/{labCore,labRoutes,experiments}.ts`; `Experiment` table (migration `20261102050000_experiments`); runner started in `server/index.ts`; `LAB_ADMIN_TOKEN` in `.env.example`; store `lab` + `ResearchLabView`; RESEARCH LAB nav enabled; rule Director recalibrated (`isMajorEvent`, new thresholds).
+WHY: VISION §10 Mode B, §13 view 6 and its authorization boundary. See D-032, D-033.
+VERIFY: `npm run typecheck` 0, `npm test` 265/265, `npm run lint` 0, `npm run build` ✓; boot smoke (503/401/400/404); Vite smoke with a real engine result.
+NOT VERIFIED: migration, runner and lab routes against a live DB (no Postgres).
 
 ### 2026-11-02 · Claude Opus 5.5 (Claude Code) · Retire APEX, audit fixes, branch cleanup
 CHANGED: `activeFundsWhere` filters every active-fund query, retiring non-registry funds (D-030); `package.json` overrides for `qs` and `deepmerge-ts` + `npm audit fix` (D-031); deleted local branch `wip/stage2-global-world` (`2ab185d`).

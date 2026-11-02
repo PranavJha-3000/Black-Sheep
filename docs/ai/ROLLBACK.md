@@ -1,5 +1,12 @@
 # Rollback
 
+## Stage 8 Research Lab · 2026-11-02
+Safe commit: `596ed04` (main). Work lives on branch `feat/stage8-research-lab`.
+Revert with: `git switch main` (branch unmerged), or after merge `git revert -m 1 <merge commit>`.
+Files touched: `config/game.ts`, `packages/engine/src/experiment.ts` + test (new), `packages/engine/src/director.ts` + test (recalibration), `server/world.ts` (major-event quiet clock), `server/{labCore,labRoutes,experiments}.ts` + tests (new), `server/index.ts`, `.env.example`, `prisma/schema.prisma`, `prisma/migrations/20261102050000_experiments/` (new), `src/store/{gameStore,gameStore.test}.ts`, `src/components/{Terminal,ResearchLabView (new)}.tsx`, `docs/**`.
+Non-code changes to undo: migration `20261102050000_experiments` creates table `Experiment`. It has never been applied (no DB). If applied, reverted code ignores it; to drop it: `DROP TABLE "Experiment";` and delete its `_prisma_migrations` row — or `docker compose down -v` (DESTROYS all world data). Reverting also restores the inert Director thresholds. Never edit the applied migration.
+Re-check after rollback: `npm run typecheck`; `npm test`; `npm run lint`; `npm run build`.
+
 ## Retire APEX + audit fixes · 2026-11-02
 Safe commit: `149d83b` (main). Work lives on branch `chore/retire-apex-audit`.
 Revert with: `git revert -m 1 <merge commit>`, then `npm install` to restore the previous lockfile's `qs`/`deepmerge-ts`.

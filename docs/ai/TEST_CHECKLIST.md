@@ -98,3 +98,12 @@ Run before any change counts as done.
 - [ ] (Needs DB) every 3 ticks one `FundNavSnapshot` row per fund; every 10 ticks (tickCount % 10 = 9) one `DirectorDecisionLog` row
 - [ ] (Needs DB) `DIRECTOR_MODE=none` → no `DirectorDecisionLog` rows and no `director-` events; `jev` → rows with `applied = false` and a "not implemented/not configured" rationale
 - [ ] (Needs DB) `curl localhost:3001/world/analytics` → JSON with no `NaN`/`Infinity`; a fund with no snapshots shows nulls
+
+### Stage 8 — Research Lab (controlled experiment worlds)
+- [ ] `npm test` includes `packages/engine/src/experiment.test.ts`, `server/labCore.test.ts`, `server/experiments.test.ts` and the RESEARCH LAB store tests
+- [ ] Boot without `LAB_ADMIN_TOKEN` → `POST /lab/experiments` returns 503; with it, a missing/wrong bearer → 401, an invalid body → 400
+- [ ] Vite dev → RESEARCH LAB enabled; `/lab/experiments` requested only while it is open
+- [ ] (Needs DB) `npx prisma migrate deploy` applies `20261102050000_experiments`; `\dt` shows `Experiment`
+- [ ] (Needs DB) create a 2-arm × 3-seed experiment with the token → status goes queued → running → done within seconds; the live world keeps ticking every 5 s meanwhile
+- [ ] (Needs DB) create the same spec again → identical run digests
+- [ ] (Needs DB) kill the server while an experiment is `running`, restart → it is re-queued and completes
