@@ -190,6 +190,18 @@ describe('worldCore', () => {
     });
   });
 
+  describe('buildWorldStatePayload memory', () => {
+    it('exposes a fund’s five newest memories (kind, tick, subject, content only) and [] without memory', () => {
+      const memory = Array.from({ length: 7 }, (_, i) => ({
+        kind: 'episodic' as const, tickCountAt: i, subject: 'NOVA', content: `m${i}`, importance: 0.5, outcomeUsd: 10,
+      }));
+      const p = buildWorldStatePayload({ name: 'live', seed: 1 }, createInitialMarket(), [fund(1, { memory }), fund(2)], []);
+      expect(p.funds[0].memory.map((m) => m.content)).toEqual(['m6', 'm5', 'm4', 'm3', 'm2']);
+      expect(p.funds[0].memory[0]).toEqual({ kind: 'episodic', tickCountAt: 6, subject: 'NOVA', content: 'm6' });
+      expect(p.funds[1].memory).toEqual([]);
+    });
+  });
+
   describe('buildWorldStatePayload', () => {
     it('renders an empty world before its first fund or event', () => {
       const market = createInitialMarket();

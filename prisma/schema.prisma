@@ -33,6 +33,7 @@ model World {
   decisions    RivalDecisionLog[]
   liquidations LiquidationLog[]
   llmCalls     LlmCallLog[]
+  memories     AgentMemory[]
 }
 
 model Fund {
@@ -54,6 +55,7 @@ model Fund {
   decisions       RivalDecisionLog[]
   liquidations    LiquidationLog[]
   llmCalls        LlmCallLog[]
+  memories        AgentMemory[]
 
   @@unique([worldId, name])
 }
@@ -200,4 +202,26 @@ model LiquidationLog {
 
   @@index([fundId])
   @@index([worldId, timestamp])
+}
+
+// A fund's persistent memory (VISION §7, D-026): episodic (its trades,
+// closes, liquidation), reflective (deterministic summaries of recent closes)
+// and relationship (other funds' public moves on its book). Written by the
+// server from pure engine rules; shown back to the fund's model. Memory, not
+// learning: no model or policy is updated.
+model AgentMemory {
+  id          Int      @id @default(autoincrement())
+  worldId     Int
+  world       World    @relation(fields: [worldId], references: [id], onDelete: Cascade)
+  fundId      Int
+  fund        Fund     @relation(fields: [fundId], references: [id], onDelete: Cascade)
+  timestamp   DateTime @default(now())
+  tickCountAt Int
+  kind        String
+  subject     String?
+  content     String
+  importance  Float
+  outcomeUsd  Float?
+
+  @@index([fundId, id])
 }
