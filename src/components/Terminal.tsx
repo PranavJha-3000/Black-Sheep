@@ -9,13 +9,14 @@ import MarketNews from "./MarketNews";
 import FundsView from "./FundsView";
 import FundDetailView from "./FundDetailView";
 import ActivityView from "./ActivityView";
+import AnalyticsView from "./AnalyticsView";
 import { useGameStore, type ObserverView } from "../store/gameStore";
 import { cx } from "./fmt";
 
 /**
  * The observation terminal (VISION §13). Humans watch; nothing here trades.
- * WORLD, FUNDS, FUND DETAIL and ACTIVITY are live; TIMELINE, RESEARCH LAB and
- * ANALYTICS are listed but arrive in later stages.
+ * WORLD, FUNDS, FUND DETAIL, ACTIVITY and ANALYTICS are live; TIMELINE and
+ * RESEARCH LAB are listed but arrive in later stages.
  */
 export default function Terminal() {
   useEffect(() => {
@@ -47,6 +48,7 @@ export default function Terminal() {
           {view === "funds" && <FundsView />}
           {view === "fund" && <FundDetailView />}
           {view === "activity" && <ActivityView />}
+          {view === "analytics" && <AnalyticsView />}
         </div>
         <Foot />
       </div>
@@ -74,7 +76,7 @@ const NAV_ITEMS: { label: string; view: ObserverView | null }[] = [
   { label: "ACTIVITY", view: "activity" },
   { label: "TIMELINE", view: null },
   { label: "RESEARCH LAB", view: null },
-  { label: "ANALYTICS", view: null },
+  { label: "ANALYTICS", view: "analytics" },
 ];
 
 function SidebarNav() {

@@ -14,10 +14,11 @@ import { projectState } from './stateMapper';
 import type { FundSummary, ProjectionPrev } from './stateMapper';
 import type { WorldStatePayload } from '../../server/worldCore';
 import type { ActivityPayload, FundTracePayload } from '../../server/observerCore';
+import type { AnalyticsPayload } from '../../server/analyticsCore';
 import { STARTING_CAPITAL } from '../../config/game';
 
-/** Observer navigation (VISION §13). TIMELINE, RESEARCH LAB and ANALYTICS come later. */
-export type ObserverView = 'world' | 'funds' | 'fund' | 'activity';
+/** Observer navigation (VISION §13). TIMELINE and RESEARCH LAB come later. */
+export type ObserverView = 'world' | 'funds' | 'fund' | 'activity' | 'analytics';
 
 export interface GameStoreState {
   view: ObserverView;
@@ -27,6 +28,8 @@ export interface GameStoreState {
   trace: FundTracePayload | null;
   /** The ACTIVITY feed (fetched only in that view). */
   activity: ActivityPayload | null;
+  /** ANALYTICS metrics (fetched only in that view). */
+  analytics: AnalyticsPayload | null;
   setView: (view: ObserverView) => void;
   openFund: (fundId: number) => void;
   /** The focus fund's DB id (lowest id in the world). Null before a fund exists. */
@@ -91,7 +94,7 @@ const SEED_FUND = createFund(STARTING_CAPITAL, 0);
 
 type SeedState = Omit<
   GameStoreState,
-  'reset' | 'selectTicker' | 'poll' | 'selectedTicker' | 'view' | 'selectedFundId' | 'trace' | 'activity' | 'setView' | 'openFund'
+  'reset' | 'selectTicker' | 'poll' | 'selectedTicker' | 'view' | 'selectedFundId' | 'trace' | 'activity' | 'analytics' | 'setView' | 'openFund'
 >;
 
 function seedState(): SeedState {
@@ -138,6 +141,7 @@ export const useGameStore = create<GameStoreState>((set, get) => ({
   selectedFundId: null,
   trace: null,
   activity: null,
+  analytics: null,
   // ---------------------------------------------------------------------------
   // Actions
   // ---------------------------------------------------------------------------
@@ -156,12 +160,13 @@ export const useGameStore = create<GameStoreState>((set, get) => ({
     try {
       const { priceHistory, navHistory, rivalDecisionKey, fundId, view, selectedFundId } = get();
       // Only the open view's investigation endpoint is polled.
-      const [raw, trace, activity] = await Promise.all([
+      const [raw, trace, activity, analytics] = await Promise.all([
         apiFetch<WorldStatePayload>('/world/state'),
         view === 'fund' && selectedFundId !== null
           ? apiFetch<FundTracePayload>(`/world/funds/${selectedFundId}/trace`).catch(() => null)
           : Promise.resolve(null),
         view === 'activity' ? apiFetch<ActivityPayload>('/world/activity').catch(() => null) : Promise.resolve(null),
+        view === 'analytics' ? apiFetch<AnalyticsPayload>('/world/analytics').catch(() => null) : Promise.resolve(null),
       ]);
 
       const prev: ProjectionPrev = {
@@ -177,6 +182,7 @@ export const useGameStore = create<GameStoreState>((set, get) => ({
       // A trace answering an older selection is dropped.
       if (trace && trace.fundId === get().selectedFundId) set({ trace });
       if (activity) set({ activity });
+      if (analytics) set({ analytics });
 
       set({
         fundId: p.fundId,
