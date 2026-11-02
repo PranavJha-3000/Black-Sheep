@@ -3,7 +3,7 @@ import { prisma } from './db';
 import { wrap } from './auth';
 import { agentObservation, ensureLiveWorld } from './world';
 import { buildWorldStatePayload, type FundInput } from './worldCore';
-import { buildActivity, buildFundTrace, type CallRowInput, type DecisionRowInput } from './observerCore';
+import { buildActivity, buildFundTrace, parseFundId, type CallRowInput, type DecisionRowInput } from './observerCore';
 import { OBSERVER_ACTIVITY_LIMIT, OBSERVER_TRACE_LIMIT } from '../config/game';
 
 /**
@@ -85,8 +85,8 @@ worldRouter.get(
   '/funds/:id/trace',
   wrap(async (req, res) => {
     const w = await ensureLiveWorld();
-    const id = /^\d+$/.test(req.params.id) ? Number(req.params.id) : NaN;
-    const fund = Number.isSafeInteger(id) ? await prisma.fund.findFirst({ where: { id, worldId: w.worldId } }) : null;
+    const id = parseFundId(req.params.id);
+    const fund = id === null ? null : await prisma.fund.findFirst({ where: { id, worldId: w.worldId } });
     if (!fund) {
       res.status(404).json({ error: 'fund not found' });
       return;
@@ -129,7 +129,10 @@ worldRouter.get(
         where,
         orderBy: { id: 'desc' },
         take,
-        include: { fund: { select: { name: true } }, ...toolsInOrder },
+        include: {
+          fund: { select: { name: true } },
+          toolCalls: { orderBy: { id: 'asc' }, select: { timestamp: true, name: true, ok: true, latencyMs: true, inputJson: true } },
+        },
       }),
       prisma.marketEventLog.findMany({ where, orderBy: { id: 'desc' }, take }),
       prisma.liquidationLog.findMany({ where, orderBy: { id: 'desc' }, take, include: { fund: { select: { name: true } } } }),
@@ -152,7 +155,20 @@ worldRouter.get(
             realizedPnL: d.realizedPnL,
             llmCall: null,
           })),
-          calls: calls.map((c) => callInput(c, c.fund.name)),
+          calls: calls.map((c) => ({
+            id: c.id,
+            timestamp: c.timestamp,
+            fundName: c.fund.name,
+            outcome: c.outcome,
+            rounds: c.rounds,
+            servedBy: c.servedBy,
+            inputTokens: c.inputTokens,
+            outputTokens: c.outputTokens,
+            costUsd: c.costUsd,
+            latencyMs: c.latencyMs,
+            error: c.error,
+            toolCalls: c.toolCalls,
+          })),
           events,
           liquidations: liquidations.map((l) => ({ timestamp: l.timestamp, fundName: l.fund.name, cause: l.cause })),
         },

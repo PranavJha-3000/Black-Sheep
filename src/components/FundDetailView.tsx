@@ -20,8 +20,11 @@ export default function FundDetailView() {
   const trace = useGameStore((s) => s.trace);
   const profile = getFundProfileByName(name);
 
-  if (selectedFundId === null || fundId !== selectedFundId) {
+  if (selectedFundId === null) {
     return <div className="p-6 text-center text-[12px] text-terminal-dim">Select a fund in FUNDS to investigate it.</div>;
+  }
+  if (fundId !== selectedFundId) {
+    return <div className="p-6 text-center text-[12px] text-terminal-dim">Loading fund…</div>;
   }
 
   return (

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildActivity, buildFundTrace, type CallRowInput, type DecisionRowInput } from './observerCore';
+import { buildActivity, buildFundTrace, parseFundId, type CallRowInput, type DecisionRowInput } from './observerCore';
 import { OBSERVER_JSON_MAX } from '../config/game';
 
 const T = (s: number) => new Date(Date.UTC(2026, 10, 2, 12, 0, s));
@@ -98,5 +98,18 @@ describe('buildActivity', () => {
     const a = buildActivity({ decisions, calls: [], events: [], liquidations: [] }, 5);
     expect(a.items).toHaveLength(5);
     expect(a.items[0].at).toBe(T(29).toISOString());
+  });
+});
+
+describe('parseFundId (review: /trace must 404, never 500)', () => {
+  it('accepts a positive INT4 id and rejects everything else', () => {
+    expect(parseFundId('42')).toBe(42);
+    expect(parseFundId('2147483647')).toBe(2147483647);
+    expect(parseFundId('2147483648')).toBeNull();
+    expect(parseFundId('99999999999999999999')).toBeNull();
+    expect(parseFundId('0')).toBeNull();
+    expect(parseFundId('abc')).toBeNull();
+    expect(parseFundId('-1')).toBeNull();
+    expect(parseFundId('1e3')).toBeNull();
   });
 });

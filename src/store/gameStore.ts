@@ -170,6 +170,9 @@ export const useGameStore = create<GameStoreState>((set, get) => ({
         rivalDecisionKey,
         focusFundId: fundId,
       };
+      // The selection changed while this poll was in flight: a newer poll owns
+      // the focus, so this projection (built for the old fund) is dropped.
+      if (get().selectedFundId !== selectedFundId) return;
       const p = projectState(raw, prev, selectedFundId);
       // A trace answering an older selection is dropped.
       if (trace && trace.fundId === get().selectedFundId) set({ trace });

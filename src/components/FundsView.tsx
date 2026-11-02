@@ -27,7 +27,12 @@ export default function FundsView() {
                 onClick={() => openFund(f.id)}
                 className="cursor-pointer border-t border-terminal-border hover:bg-[#121416]"
               >
-                <td className="px-2 py-1.5 font-bold tracking-wider">{f.name}</td>
+                <td className="px-2 py-1.5 font-bold tracking-wider">
+                  {/* The row is clickable for the mouse; this button is the keyboard and screen-reader path. */}
+                  <button type="button" onClick={() => openFund(f.id)} className="text-left tracking-wider hover:underline">
+                    {f.name}
+                  </button>
+                </td>
                 <td className="px-2 py-1.5 uppercase text-terminal-dim">{f.personality ?? '—'}</td>
                 <td className="px-2 py-1.5 text-terminal-dim">{modelName(f.model)}</td>
                 <td className="px-2 py-1.5">{fmtMoney(f.nav)}</td>

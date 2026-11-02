@@ -120,6 +120,16 @@ export interface ActivityPayload {
 
 // --- builders ---------------------------------------------------------------
 
+/** Postgres INT4 max: a larger id can name no fund, and would make Prisma throw (a 500). */
+const MAX_DB_ID = 2_147_483_647;
+
+/** A route `:id` that can name a fund, or null (the route answers 404). */
+export function parseFundId(param: string): number | null {
+  if (!/^\d{1,10}$/.test(param)) return null;
+  const id = Number(param);
+  return id >= 1 && id <= MAX_DB_ID ? id : null;
+}
+
 const clip = (s: string): string => (s.length > OBSERVER_JSON_MAX ? `${s.slice(0, OBSERVER_JSON_MAX)}…` : s);
 
 function toolTrace(t: ToolRowInput): ToolTrace {
@@ -162,10 +172,13 @@ export function buildFundTrace(fundId: number, rows: DecisionRowInput[], memory:
   };
 }
 
+/** The activity feed never shows tool outputs, so the route does not load them. */
+export type ActivityCallInput = Omit<CallRowInput, 'toolCalls'> & { toolCalls: Omit<ToolRowInput, 'outputJson'>[] };
+
 export interface ActivityInput {
   decisions: DecisionRowInput[];
   /** Model calls; each call's tool calls become their own items. */
-  calls: CallRowInput[];
+  calls: ActivityCallInput[];
   events: EventInput[];
   liquidations: LiquidationRowInput[];
 }
