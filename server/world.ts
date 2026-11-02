@@ -9,6 +9,7 @@ import { generateEvent, initialScheduler, maybeFireScriptedEvent, type Scheduler
 import {
   checkLiquidation,
   deriveCauseOfDeath,
+  getExposure,
   liquidateFund,
   markToMarket,
   peakNav,
@@ -23,6 +24,7 @@ import {
 } from '@black-sheep/engine/rival';
 import { buildFundSystemPrompt, buildRivalUserMessage, shouldRivalReconsider } from '@black-sheep/engine/rivalLLM';
 import { runFundTool } from '@black-sheep/engine/fundTools';
+import { buildDirectorEvent, observeWorld, ruleDirector, validateIntervention, type DirectorDecision } from '@black-sheep/engine/director';
 import {
   episodeFromDecision,
   episodeFromLiquidation,
@@ -37,6 +39,7 @@ import type { MarketEvent, MarketState, Ticker } from '@black-sheep/engine/types
 import { prisma } from './db';
 import { BudgetLedger, estimateCallCostUsd } from './budget';
 import { anthropicCreate, runDecisionLoop, type CreateMessage, type LoopResult } from './providers/anthropic';
+import { jevConfigFromEnv, proposeWithJev, resolveDirectorMode } from './providers/jev';
 import {
   addMissingCompanies,
   enginePositionFromRow,
@@ -51,6 +54,9 @@ import {
 } from './worldCore';
 import {
   DECISION_MAX_TOKENS,
+  DIRECTOR_EVERY_TICKS,
+  DIRECTOR_MODE,
+  DIRECTOR_OFFSET,
   DECISION_PROMPT_TOKENS_ESTIMATE,
   EVENT_BUFFER,
   GLOBAL_DAILY_BUDGET_USD,
@@ -85,6 +91,10 @@ import { MODEL_REGISTRY } from '../config/models';
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY ?? '';
 /** The provider call, or null when no key is configured (funds run on policy). */
 const createMessage: CreateMessage | null = ANTHROPIC_API_KEY ? anthropicCreate(ANTHROPIC_API_KEY) : null;
+/** World Director configuration (D-029): none | rule | jev (the Jev adapter is a disabled stub). */
+const directorMode = resolveDirectorMode(process.env.DIRECTOR_MODE, DIRECTOR_MODE);
+export const currentDirectorMode = (): string => directorMode;
+const jevConfig = jevConfigFromEnv(process.env);
 /** Every provider call reserves budget here first (VISION §12, D-025). */
 const ledger = new BudgetLedger(GLOBAL_DAILY_BUDGET_USD, MAX_CONCURRENT_LLM_CALLS);
 
@@ -118,7 +128,7 @@ export interface Agent {
   memory: MemoryEntry[];
 }
 
-interface World {
+export interface World {
   worldId: number;
   name: string;
   /** Persisted at creation; a restart resumes the same RNG stream (D-018). */
@@ -127,6 +137,8 @@ interface World {
   scheduler: SchedulerState;
   events: MarketEvent[];
   agents: Agent[];
+  /** What the Director needs to respect quiet periods and its cooldown. */
+  director: { lastEventTick: number | null; lastInterventionTick: number | null };
 }
 
 let live: World | undefined;
@@ -288,7 +300,13 @@ async function loadLiveWorld(): Promise<World> {
   });
   ledger.seed(Object.fromEntries(spent.map((r) => [r.fundId, r._sum.costUsd ?? 0])), new Date());
 
-  live = { worldId, name: row.name, seed: row.seed, market, scheduler, events, agents };
+  const lastIntervention = await prisma.directorDecisionLog.findFirst({ where: { worldId, applied: true }, orderBy: { id: 'desc' } });
+  const director = {
+    lastEventTick: eventRows.find((r) => r.tickCountAt !== null)?.tickCountAt ?? null,
+    lastInterventionTick: lastIntervention?.tickCountAt ?? null,
+  };
+
+  live = { worldId, name: row.name, seed: row.seed, market, scheduler, events, agents, director };
   return live;
 }
 
@@ -304,25 +322,34 @@ async function tickWorld(w: World): Promise<void> {
   w.scheduler = scripted.next;
   if (!evt) evt = generateEvent(next, rng);
   if (evt) next = applyEvent(next, evt) as typeof next;
+
+  // The World Director, in its own slot; never on a tick another event fired.
+  let directorEvt: MarketEvent | null = null;
+  if (directorMode !== 'none' && next.tickCount % DIRECTOR_EVERY_TICKS === DIRECTOR_OFFSET) {
+    directorEvt = await runDirector(w, next, evt !== null);
+    if (directorEvt) next = applyEvent(next, directorEvt) as typeof next;
+  }
   w.market = next;
 
   // Track all-time high NAV for every fund using the new market prices.
   // Done before liquidation so the peak captures the pre-liquidation state.
-  await trackPeakNav(w);
+  const marks = await trackPeakNav(w);
 
   // Server-authoritative liquidation: after prices move, check every fund
   // for margin breach.
   await liquidateFunds(w);
 
-  if (evt) {
-    w.events = [evt, ...w.events].slice(0, EVENT_BUFFER);
+  for (const e of [evt, directorEvt]) {
+    if (!e) continue;
+    w.events = [e, ...w.events].slice(0, EVENT_BUFFER);
+    w.director.lastEventTick = next.tickCount;
     await prisma.marketEventLog.create({
       data: {
         worldId: w.worldId,
-        type: evt.type,
-        ticker: evt.ticker ?? null,
-        headline: evt.headline,
-        priceImpactPercent: evt.priceImpactPercent,
+        type: e.type,
+        ticker: e.ticker ?? null,
+        headline: e.headline,
+        priceImpactPercent: e.priceImpactPercent,
         tickCountAt: next.tickCount,
       },
     });
@@ -336,6 +363,10 @@ async function tickWorld(w: World): Promise<void> {
         worldId: w.worldId,
         snapshotJson: JSON.stringify({ market: next, scheduler: w.scheduler }),
       },
+    });
+    // The NAV series behind the performance metrics (D-028).
+    await prisma.fundNavSnapshot.createMany({
+      data: marks.map((m) => ({ worldId: w.worldId, fundId: m.fundId, tickCountAt: next.tickCount, nav: m.nav, grossExposure: m.grossExposure })),
     });
   }
 
@@ -358,16 +389,71 @@ async function tickWorld(w: World): Promise<void> {
  * market tick so the peak captures price movement between decisions.
  * Cheap: one read + at most one write per fund per tick.
  */
-async function trackPeakNav(w: World): Promise<void> {
+async function trackPeakNav(w: World): Promise<{ fundId: number; nav: number; grossExposure: number }[]> {
   const funds = await prisma.fund.findMany({ where: { worldId: w.worldId } });
+  const marks: { fundId: number; nav: number; grossExposure: number }[] = [];
   for (const f of funds) {
     const open = await prisma.position.findMany({ where: { fundId: f.id, closedAt: null } });
     const ef = engineFundFromRows(f.cash, f.startingCapital, open);
     const nav = markToMarket(ef, w.market).nav;
+    marks.push({ fundId: f.id, nav, grossExposure: getExposure(ef, w.market).grossExposure });
     if (nav > f.peakNav) {
       await prisma.fund.update({ where: { id: f.id }, data: { peakNav: nav } });
     }
   }
+  return marks;
+}
+
+/**
+ * One World Director cycle (VISION §8, D-029): observe public conditions,
+ * let the configured Director propose, validate, and have the engine build
+ * the event. Every cycle is logged, including "no intervention".
+ */
+export async function runDirector(w: World, market: MarketState, eventFiredThisTick: boolean): Promise<MarketEvent | null> {
+  try {
+    return await directorCycle(w, market, eventFiredThisTick);
+  } catch (err) {
+    // The scheduler has already advanced this tick: aborting it would lose that event.
+    console.error('[world] director cycle failed; no intervention this cycle', err);
+    return null;
+  }
+}
+
+async function directorCycle(w: World, market: MarketState, eventFiredThisTick: boolean): Promise<MarketEvent | null> {
+  const obs = observeWorld({
+    market,
+    lastEventTick: w.director.lastEventTick,
+    lastInterventionTick: w.director.lastInterventionTick,
+    eventFiredThisTick,
+    fundsAlive: w.agents.filter((a) => !a.liquidated).length,
+    fundsTotal: w.agents.length,
+  });
+  let decision: DirectorDecision;
+  if (directorMode === 'jev') {
+    const jev = await proposeWithJev(jevConfig, obs);
+    decision = { intervention: validateIntervention(jev.proposal, obs), rationale: jev.rationale };
+  } else {
+    const rule = ruleDirector(obs);
+    decision = { intervention: validateIntervention(rule.intervention, obs), rationale: rule.rationale };
+  }
+  // A separate RNG stream, so Director cycles never shift the market's own noise.
+  const rng = mulberry32((w.seed ^ 0x9e3779b9 ^ Math.imul(market.tickCount + 1, 0x85ebca6b)) >>> 0);
+  const evt = buildDirectorEvent(decision.intervention, market, rng);
+  const i = decision.intervention;
+  await prisma.directorDecisionLog.create({
+    data: {
+      worldId: w.worldId,
+      tickCountAt: market.tickCount,
+      mode: directorMode,
+      kind: i.kind,
+      sector: i.kind === 'sector_shock' || i.kind === 'sector_boom' ? i.sector : null,
+      rationale: decision.rationale,
+      applied: evt !== null,
+      eventHeadline: evt?.headline ?? null,
+    },
+  });
+  if (evt) w.director.lastInterventionTick = market.tickCount;
+  return evt;
 }
 
 /**

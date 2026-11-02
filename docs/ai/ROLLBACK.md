@@ -1,5 +1,12 @@
 # Rollback
 
+## Stage 7 metrics + World Director · 2026-11-02
+Safe commit: `438600d` (main). Work lives on branch `feat/stage7-metrics-director`.
+Revert with: `git switch main` (branch unmerged), or after merge `git revert -m 1 <merge commit>`.
+Files touched: `config/game.ts`, `packages/engine/src/{metrics,director}.ts` + tests (new), `server/{world,worldRoutes}.ts`, `server/analyticsCore.ts` + test (new), `server/providers/jev.ts` + test (new), `prisma/schema.prisma`, `prisma/migrations/20261102040000_metrics_director/` (new), `src/store/{gameStore,gameStore.test}.ts`, `src/components/{Terminal,AnalyticsView (new)}.tsx`, `docs/**`.
+Non-code changes to undo: migration `20261102040000_metrics_director` creates tables `FundNavSnapshot` and `DirectorDecisionLog`. It has never been applied (no DB). If applied, reverted code ignores both tables; to drop them: `DROP TABLE "DirectorDecisionLog"; DROP TABLE "FundNavSnapshot";` and delete its `_prisma_migrations` row — or `docker compose down -v` (DESTROYS all world data). Director events already in `MarketEventLog` (ids `director-…`) stay as ordinary history. To stop the Director without a rollback: `DIRECTOR_MODE=none`. Never edit the applied migration.
+Re-check after rollback: `npm run typecheck`; `npm test`; `npm run lint`; `npm run build`.
+
 ## Stage 6 observer UI · 2026-11-02
 Safe commit: `76b6bde` (main). Work lives on branch `feat/stage6-observer-ui`.
 Revert with: `git switch main` (branch unmerged), or after merge `git revert -m 1 <merge commit>`.
