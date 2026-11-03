@@ -30,6 +30,12 @@
 
 ## Log
 
+### 2026-11-03 · Claude Opus 5.5 (Claude Code) · Apple-style UI revamp
+CHANGED: `tailwind.config.js` + `src/index.css` (CSS-variable palette, system font, shared classes, motion and accessibility media queries); every observer component restyled; `NAV_ITEMS` moved to `gameStore.ts` (shared by sidebar and header).
+WHY: User request. See D-037 (including the non-functional controls that were removed).
+VERIFY: typecheck, `npm test` 276/276, lint, build ✓. All six views plus the new-experiment form checked in the browser at 1440×900 on real data (local Postgres), no console errors.
+NOT VERIFIED: phone or tablet widths (layout is desktop-first, as before); Safari or macOS rendering (checked in Chromium on Windows only).
+
 ### 2026-11-03 · Claude Opus 5.5 (Claude Code) · Demo-ready: Postgres without Docker, first real-DB run
 CHANGED: dev dep `embedded-postgres`; `scripts/local-db.ts` + `npm run db:local`; `.pgdata/` git-ignored; README run steps + API table; `verify-backend.ps1` uses `migrate deploy`.
 WHY: User wants a demoable build where only API connection is left. See D-036.

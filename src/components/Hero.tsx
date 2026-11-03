@@ -10,18 +10,18 @@ export default function Hero() {
   const n = useGameStore((s) => s.fund.positions.length);
   const pc = dailyPnl >= 0 ? 'text-terminal-green' : 'text-terminal-red';
   return (
-    <div className="grid grid-cols-12 gap-2">
-      <div className="col-span-4 rounded border border-terminal-border bg-terminal-panel p-3">
-        <div className="text-[11px] tracking-widest text-terminal-dim">NET ASSET VALUE</div>
-        <div className="mt-1 text-[34px] font-bold leading-none text-[#c8f5d6]">{fmtMoney(nav)}</div>
-        <div className={cx('mt-1.5 text-[15px] font-semibold', pc)}>{fmtSigned(dailyPnl)} <span>({fmtPct(dailyPct)})</span> <span className="text-[11px] font-normal text-terminal-dim">TODAY</span></div>
-        <div className="mt-2 grid grid-cols-3 gap-1 border-t border-terminal-border pt-2 text-[10px]">
-          <span className="text-terminal-dim">Cash</span><span className="col-span-2 text-right">{fmtMoney(cash)}</span>
-          <span className="text-terminal-dim">Positions</span><span className="col-span-2 text-right">{n}</span>
-          <span className="text-terminal-dim">Leverage</span><span className="col-span-2 text-right">{lev.toFixed(2)}x</span>
-        </div>
+    <div className="grid grid-cols-12 gap-6">
+      <div className="panel col-span-12 lg:col-span-5">
+        <div className="label">Net asset value</div>
+        <div className="mt-3 text-[44px] font-semibold leading-none tracking-[-0.03em]">{fmtMoney(nav)}</div>
+        <div className={cx('mt-2 text-[15px] font-medium', pc)}>{fmtSigned(dailyPnl)} ({fmtPct(dailyPct)}) <span className="font-normal text-terminal-dim">today</span></div>
+        <dl className="mt-6 grid grid-cols-3 gap-4 border-t border-terminal-border pt-4 text-[13px]">
+          <div><dt className="text-[11px] text-terminal-dim">Cash</dt><dd className="mt-0.5">{fmtMoney(cash)}</dd></div>
+          <div><dt className="text-[11px] text-terminal-dim">Positions</dt><dd className="mt-0.5">{n}</dd></div>
+          <div><dt className="text-[11px] text-terminal-dim">Leverage</dt><dd className="mt-0.5">{lev.toFixed(2)}×</dd></div>
+        </dl>
       </div>
-      <div className="col-span-8"><RiskGauge /></div>
+      <div className="col-span-12 lg:col-span-7"><RiskGauge /></div>
     </div>
   );
 }

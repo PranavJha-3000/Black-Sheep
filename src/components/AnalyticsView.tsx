@@ -8,58 +8,56 @@ const usd = (n: number | null, dp = 4) => (n === null ? '—' : `$${n.toFixed(dp
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <div className="rounded border border-terminal-border bg-terminal-panel p-3">
-      <div className="mb-2 text-[11px] tracking-widest text-terminal-dim">{title}</div>
+    <div className="panel">
+      <div className="label mb-4">{title}</div>
       {children}
     </div>
   );
 }
 
-const TH = 'px-2 py-1 text-left font-normal text-terminal-dim';
-const TD = 'px-2 py-1 tabular-nums';
 
 /** ANALYTICS (VISION §11, §13): financial and AI-systems metrics per fund, world conditions, the Director. */
 export default function AnalyticsView() {
   const a = useGameStore((s) => s.analytics);
   if (!a) {
     return (
-      <Section title="ANALYTICS">
-        <div className="p-6 text-center text-[12px] text-terminal-dim">Loading analytics…</div>
+      <Section title="Analytics">
+        <div className="p-6 text-center text-[13px] text-terminal-dim">Loading analytics…</div>
       </Section>
     );
   }
   const { events, survival } = a.world;
 
   return (
-    <div className="space-y-3">
-      <Section title="FINANCIAL">
+    <div className="space-y-6">
+      <Section title="Financial">
         {a.funds.length === 0 ? (
-          <div className="p-6 text-center text-[12px] text-terminal-dim">No funds yet.</div>
+          <div className="p-6 text-center text-[13px] text-terminal-dim">No funds yet.</div>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full text-[11px]">
+            <table className="data-table w-full text-[13px]">
               <thead>
                 <tr>
-                  {['FUND', 'MODEL', 'RETURN', 'MAX DD', 'VOL', 'SHARPE', 'TURNOVER', 'TOP POS', 'HHI', 'SNAPS'].map((h) => (
-                    <th key={h} className={TH}>{h}</th>
+                  {['Fund', 'Model', 'Return', 'Max DD', 'Vol', 'Sharpe', 'Turnover', 'Top pos', 'HHI', 'Snaps'].map((h) => (
+                    <th key={h}>{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
                 {a.funds.map((f) => (
                   <tr key={f.id} className="border-t border-terminal-border">
-                    <td className={cx(TD, 'font-bold', f.liquidated && 'text-terminal-red line-through')}>{f.name}</td>
-                    <td className={cx(TD, 'text-terminal-dim')}>{modelName(f.model)}</td>
-                    <td className={cx(TD, f.financial.totalReturn !== null && (f.financial.totalReturn >= 0 ? 'text-terminal-green' : 'text-terminal-red'))}>
+                    <td className={cx('font-semibold', f.liquidated && 'text-terminal-red line-through')}>{f.name}</td>
+                    <td className={cx('text-terminal-dim')}>{modelName(f.model)}</td>
+                    <td className={cx(f.financial.totalReturn !== null && (f.financial.totalReturn >= 0 ? 'text-terminal-green' : 'text-terminal-red'))}>
                       {pct(f.financial.totalReturn, 2)}
                     </td>
-                    <td className={TD}>{pct(f.financial.maxDrawdown)}</td>
-                    <td className={TD}>{pct(f.financial.volatility, 2)}</td>
-                    <td className={TD}>{num(f.financial.sharpe)}</td>
-                    <td className={TD}>{num(f.financial.turnover)}</td>
-                    <td className={TD}>{pct(f.financial.largestShare, 0)}</td>
-                    <td className={TD}>{num(f.financial.hhi)}</td>
-                    <td className={cx(TD, 'text-terminal-dim')}>{f.financial.snapshots}</td>
+                    <td>{pct(f.financial.maxDrawdown)}</td>
+                    <td>{pct(f.financial.volatility, 2)}</td>
+                    <td>{num(f.financial.sharpe)}</td>
+                    <td>{num(f.financial.turnover)}</td>
+                    <td>{pct(f.financial.largestShare, 0)}</td>
+                    <td>{num(f.financial.hhi)}</td>
+                    <td className={cx('text-terminal-dim')}>{f.financial.snapshots}</td>
                   </tr>
                 ))}
               </tbody>
@@ -68,33 +66,33 @@ export default function AnalyticsView() {
         )}
       </Section>
 
-      <Section title="AI SYSTEMS">
+      <Section title="AI systems">
         {a.funds.length === 0 ? (
-          <div className="p-6 text-center text-[12px] text-terminal-dim">No funds yet.</div>
+          <div className="p-6 text-center text-[13px] text-terminal-dim">No funds yet.</div>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full text-[11px]">
+            <table className="data-table w-full text-[13px]">
               <thead>
                 <tr>
-                  {['FUND', 'DECISIONS', 'BY MODEL', 'FALLBACK', 'CALLS', 'FAILED', 'TOKENS IN/OUT', 'COST', '$/DECISION', 'LATENCY', 'TOOLS/CALL'].map((h) => (
-                    <th key={h} className={TH}>{h}</th>
+                  {['Fund', 'Decisions', 'By model', 'Fallback', 'Calls', 'Failed', 'Tokens in/out', 'Cost', '$/decision', 'Latency', 'Tools/call'].map((h) => (
+                    <th key={h}>{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
                 {a.funds.map((f) => (
                   <tr key={f.id} className="border-t border-terminal-border">
-                    <td className={cx(TD, 'font-bold')}>{f.name}</td>
-                    <td className={TD}>{f.ai.decisions}</td>
-                    <td className={TD}>{f.ai.llmDecisions}</td>
-                    <td className={TD}>{pct(f.ai.fallbackRate, 0)}</td>
-                    <td className={TD}>{f.ai.calls}</td>
-                    <td className={TD}>{pct(f.ai.failureRate, 0)}</td>
-                    <td className={TD}>{f.ai.inputTokens.toLocaleString('en-US')} / {f.ai.outputTokens.toLocaleString('en-US')}</td>
-                    <td className={TD}>{usd(f.ai.costUsd, 2)}</td>
-                    <td className={TD}>{usd(f.ai.costPerLlmDecision)}</td>
-                    <td className={TD}>{f.ai.avgLatencyMs === null ? '—' : `${(f.ai.avgLatencyMs / 1000).toFixed(1)}s`}</td>
-                    <td className={TD}>{num(f.ai.toolCallsPerCall, 1)}</td>
+                    <td className={cx('font-semibold')}>{f.name}</td>
+                    <td>{f.ai.decisions}</td>
+                    <td>{f.ai.llmDecisions}</td>
+                    <td>{pct(f.ai.fallbackRate, 0)}</td>
+                    <td>{f.ai.calls}</td>
+                    <td>{pct(f.ai.failureRate, 0)}</td>
+                    <td>{f.ai.inputTokens.toLocaleString('en-US')} / {f.ai.outputTokens.toLocaleString('en-US')}</td>
+                    <td>{usd(f.ai.costUsd, 2)}</td>
+                    <td>{usd(f.ai.costPerLlmDecision)}</td>
+                    <td>{f.ai.avgLatencyMs === null ? '—' : `${(f.ai.avgLatencyMs / 1000).toFixed(1)}s`}</td>
+                    <td>{num(f.ai.toolCallsPerCall, 1)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -103,39 +101,39 @@ export default function AnalyticsView() {
         )}
       </Section>
 
-      <div className="grid gap-3 md:grid-cols-2">
-        <Section title="WORLD">
-          <dl className="grid grid-cols-[140px_1fr] gap-y-1 text-[11px]">
-            <dt className="text-terminal-dim">SURVIVAL</dt>
+      <div className="grid gap-6 md:grid-cols-2">
+        <Section title="World">
+          <dl className="grid grid-cols-[160px_1fr] gap-y-2.5 text-[13px]">
+            <dt className="text-terminal-dim">Survival</dt>
             <dd>{survival.alive}/{survival.total} alive ({pct(survival.rate, 0)})</dd>
-            <dt className="text-terminal-dim">EVENTS (RECENT)</dt>
+            <dt className="text-terminal-dim">Events (recent)</dt>
             <dd>{events.count}</dd>
-            <dt className="text-terminal-dim">BY TYPE</dt>
+            <dt className="text-terminal-dim">By type</dt>
             <dd>{Object.entries(events.byType).map(([t, n]) => `${t} ${n}`).join(' · ') || '—'}</dd>
-            <dt className="text-terminal-dim">TYPE DIVERSITY</dt>
+            <dt className="text-terminal-dim">Type diversity</dt>
             <dd>{num(events.typeDiversity)}</dd>
-            <dt className="text-terminal-dim">MEAN |IMPACT|</dt>
+            <dt className="text-terminal-dim">Mean |impact|</dt>
             <dd>{events.meanAbsImpact.toFixed(2)}%</dd>
-            <dt className="text-terminal-dim">EXTREME</dt>
+            <dt className="text-terminal-dim">Extreme</dt>
             <dd>{events.extremeCount}</dd>
           </dl>
         </Section>
-        <Section title="WORLD DIRECTOR">
-          <dl className="grid grid-cols-[140px_1fr] gap-y-1 text-[11px]">
-            <dt className="text-terminal-dim">MODE</dt>
-            <dd className="uppercase">{a.director.mode}</dd>
-            <dt className="text-terminal-dim">CYCLES</dt>
+        <Section title="World Director">
+          <dl className="grid grid-cols-[160px_1fr] gap-y-2.5 text-[13px]">
+            <dt className="text-terminal-dim">Mode</dt>
+            <dd className="capitalize">{a.director.mode}</dd>
+            <dt className="text-terminal-dim">Cycles</dt>
             <dd>{a.director.cycles}</dd>
-            <dt className="text-terminal-dim">INTERVENTIONS</dt>
+            <dt className="text-terminal-dim">Interventions</dt>
             <dd>{a.director.applied}</dd>
-            <dt className="text-terminal-dim">BY KIND</dt>
+            <dt className="text-terminal-dim">By kind</dt>
             <dd>{Object.entries(a.director.byKind).map(([k, n]) => `${k} ${n}`).join(' · ') || '—'}</dd>
           </dl>
         </Section>
       </div>
 
-      <Section title="LIMITATIONS">
-        <ul className="list-disc space-y-1 pl-5 text-[11px] text-terminal-dim">
+      <Section title="Limitations">
+        <ul className="list-disc space-y-1.5 pl-5 text-[13px] leading-relaxed text-terminal-dim">
           {a.notes.map((n) => (
             <li key={n}>{n}</li>
           ))}
