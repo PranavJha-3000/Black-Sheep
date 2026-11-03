@@ -19,3 +19,6 @@ dist-ssr/
 
 # Vite cache
 .vite/
+
+# Local Postgres data (npm run db:local)
+.pgdata/

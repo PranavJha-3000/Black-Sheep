@@ -1,5 +1,13 @@
 # Decisions
 
+### D-036 · 2026-11-03 · Claude Opus 5.5 (Claude Code)
+**Decision:** Add `embedded-postgres` (dev dependency, pinned `16.14.0-beta.17`; the package tags every release "beta") and `npm run db:local` (`scripts/local-db.ts`): a real Postgres 16 from npm binaries on :5432 with docker-compose's credentials, data in git-ignored `.pgdata/`. Docker stays supported (`npm run db:up`).
+**Context:** User asked for a demoable build where only connecting APIs is left. Docker Desktop on this machine fails to start its engine (WSL bootstrap error), which had blocked every live-DB check since Stage 2.
+**Reasoning:** Same Postgres major as the compose file, no system install, one command. With it all five migrations applied, `prisma migrate diff` against the schema reported no drift, and the server, world loop, lab runner and every observer view were exercised on real data.
+**Rejected:** PGlite (not wire-compatible with Prisma without an extra socket shim); debugging Docker Desktop (machine state outside the repo).
+**Tradeoff accepted:** ~30 MB of platform binaries in `node_modules` for dev only. Two Postgres instances cannot share :5432 — run `db:local` or `db:up`, not both.
+**Revisit if:** Docker works on every dev machine, or production needs a managed Postgres (this is dev-only).
+
 ### D-035 · 2026-11-02 · Claude Opus 5.5 (Claude Code)
 **Decision:** Liquidation is judged on the whole fund. `checkLiquidation` now flags a fund when its equity (NAV = cash + longs − shorts, at market) falls below `MAINTENANCE_MARGIN_RATE` (25%) of its shorts' current value. Before, only each short's posted margin plus its own P&L counted, so free cash never backed a short. Initial margin is unchanged: 50% of a new short is still locked out of `availableCash`. `LIQUIDATION_RULE_VERSION = 2` is in `config/game.ts`, so experiment manifests from the old rule hash differently. The client's `liquidationAt` (the NAV at which the fund dies) is now 25% of the short book.
 **Context:** User decision 2026-11-02 after D-034. Under the old rule a $10M fund with one $2M short up ~20% was liquidated while holding ~75% of NAV in cash; the old `liquidationAt` showed such a fund dying at a NAV of $9.5M (a 5% drawdown).
