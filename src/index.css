@@ -2,33 +2,117 @@
 @tailwind components;
 @tailwind utilities;
 
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+/* Apple dark system palette, as "r g b" so Tailwind's /alpha modifiers work. */
+:root {
+  --canvas: 0 0 0;
+  --chrome: 12 12 14;
+  --panel: 22 22 24;
+  --raised: 34 34 37;
+  --text: 245 245 247;
+  --soft: 199 199 204;
+  --dim: 142 142 147;
+  --faint: 72 72 74;
+  --green: 48 209 88;
+  --red: 255 69 58;
+  --orange: 255 159 10;
+  --yellow: 255 214 10;
+  --blue: 10 132 255;
+  --purple: 191 90 242;
+  color-scheme: dark;
+}
 
 html,
 body,
 #root {
   height: 100%;
-  background-color: #0a0a0a;
-  color: #e0e0e0;
+  background-color: rgb(var(--canvas));
+  color: rgb(var(--text));
 }
 
 body {
-  font-family: 'JetBrains Mono', 'Fira Code', Consolas, Monaco, monospace;
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif;
+  font-size: 13px;
+  line-height: 1.45;
+  letter-spacing: -0.003em;
+  /* Figures line up in every column and never jitter as prices tick. */
+  font-variant-numeric: tabular-nums;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
+
+::selection { background: rgb(var(--blue) / 0.35); }
+input[type="checkbox"], input[type="radio"] { accent-color: rgb(var(--blue)); }
+
+:focus-visible {
+  outline: 2px solid rgb(var(--blue));
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+@layer components {
+  /* One surface for every grouped region: quiet fill, hairline edge, soft depth. */
+  .panel {
+    @apply rounded-2xl border border-terminal-border bg-terminal-panel p-5;
+    box-shadow: 0 1px 0 rgb(255 255 255 / 0.03) inset, 0 8px 24px -12px rgb(0 0 0 / 0.6);
+  }
+  /* Section header: small, medium weight, secondary colour. */
+  .label {
+    @apply text-[11px] font-medium uppercase tracking-[0.06em] text-terminal-dim;
+  }
+  .data-table th {
+    @apply whitespace-nowrap px-3 pb-2 text-left text-[11px] font-medium uppercase tracking-[0.05em] text-terminal-dim;
+  }
+  .data-table td {
+    @apply whitespace-nowrap px-3 py-2.5;
+  }
+  .data-table tbody tr {
+    @apply border-t border-terminal-border transition-colors duration-150;
+  }
+  /* Press feedback lands on pointer-down. */
+  .press {
+    @apply transition-[transform,background-color,border-color,color] duration-150 ease-out active:scale-[0.98];
+  }
+}
+
+/* Views cross-fade in when you switch; nothing slides. */
+@keyframes view-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: none; }
+}
+.view-in { animation: view-in 280ms cubic-bezier(0.2, 0.8, 0.2, 1) both; }
+
+@keyframes live-dot {
+  0%, 100% { box-shadow: 0 0 0 0 rgb(var(--green) / 0.5); }
+  50% { box-shadow: 0 0 0 4px rgb(var(--green) / 0); }
+}
+.live-dot { animation: live-dot 2.4s ease-in-out infinite; }
 
 @keyframes pulse-warn {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.6; }
 }
 @keyframes pulse-critical {
-  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(255,49,49,0.5); }
-  50% { opacity: 0.7; box-shadow: 0 0 8px 2px rgba(255,49,49,0.4); }
+  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgb(var(--red) / 0.5); }
+  50% { opacity: 0.75; box-shadow: 0 0 8px 2px rgb(var(--red) / 0.35); }
 }
-.animate-pulse-slow {
-  animation: pulse-warn 2s ease-in-out infinite;
+.animate-pulse-slow { animation: pulse-warn 2s ease-in-out infinite; }
+.animate-pulse { animation: pulse-critical 1.2s ease-in-out infinite; }
+
+/* Thin, quiet scrollbars. */
+* { scrollbar-width: thin; scrollbar-color: rgb(255 255 255 / 0.14) transparent; }
+
+@media (prefers-reduced-motion: reduce) {
+  .view-in { animation: view-in-fade 200ms ease both; }
+  .live-dot, .animate-pulse, .animate-pulse-slow { animation: none; }
+  .press { @apply active:scale-100; }
 }
-.animate-pulse {
-  animation: pulse-critical 1.2s ease-in-out infinite;
+@keyframes view-in-fade { from { opacity: 0; } to { opacity: 1; } }
+
+@media (prefers-reduced-transparency: reduce) {
+  .material { backdrop-filter: none !important; background-color: rgb(var(--chrome)) !important; }
+}
+
+@media (prefers-contrast: more) {
+  :root { --dim: 174 174 178; --panel: 28 28 30; }
+  .panel { border-color: rgb(255 255 255 / 0.3); }
 }

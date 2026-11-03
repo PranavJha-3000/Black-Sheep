@@ -11,17 +11,17 @@ const signedPct = (n: number, dp = 2) => `${n >= 0 ? '+' : ''}${(n * 100).toFixe
 const FUND_NAME: Record<string, string> = Object.fromEntries(FUND_PROFILES.map((p) => [p.key, p.name]));
 const STATUS_STYLE: Record<string, string> = {
   queued: 'text-terminal-dim',
-  running: 'text-[#e0c060]',
+  running: 'text-terminal-caution',
   done: 'text-terminal-green',
   failed: 'text-terminal-red',
 };
-const SERIES_COLORS = ['#8fb3ff', '#e0c060', '#7fd17f', '#d08fff', '#ff8f8f'];
+const SERIES_COLORS = ['rgb(var(--blue))', 'rgb(var(--yellow))', 'rgb(var(--green))', 'rgb(var(--purple))', 'rgb(var(--orange))'];
 
 function Section({ title, children, right }: { title: string; children: React.ReactNode; right?: React.ReactNode }) {
   return (
-    <div className="rounded border border-terminal-border bg-terminal-panel p-3">
-      <div className="mb-2 flex items-center justify-between text-[11px] tracking-widest text-terminal-dim">
-        <span>{title}</span>
+    <div className="panel">
+      <div className="mb-4 flex items-center justify-between">
+        <span className="label">{title}</span>
         {right}
       </div>
       {children}
@@ -38,21 +38,21 @@ export default function ResearchLabView() {
   const [creating, setCreating] = useState(false);
 
   return (
-    <div className="grid gap-3 lg:grid-cols-[260px_1fr]">
+    <div className="grid gap-6 lg:grid-cols-[280px_1fr]">
       <Section
         title="EXPERIMENTS"
         right={
-          <button type="button" onClick={() => setCreating((c) => !c)} className="text-[10px] tracking-wider text-[#8fb3ff] hover:text-white">
-            {creating ? 'CLOSE' : '+ NEW'}
+          <button type="button" onClick={() => setCreating((c) => !c)} className="press rounded-full bg-terminal-accent/15 px-3 py-1 text-[12px] font-medium normal-case tracking-normal text-terminal-accent hover:bg-terminal-accent/25">
+            {creating ? 'Close' : 'New experiment'}
           </button>
         }
       >
         {!list ? (
-          <div className="p-4 text-center text-[12px] text-terminal-dim">Loading experiments…</div>
+          <div className="p-4 text-center text-[13px] text-terminal-dim">Loading experiments…</div>
         ) : list.length === 0 ? (
-          <div className="p-4 text-center text-[12px] text-terminal-dim">No experiments yet.</div>
+          <div className="p-4 text-center text-[13px] text-terminal-dim">No experiments yet.</div>
         ) : (
-          <div className="space-y-0.5">
+          <div className="-mx-2 space-y-0.5">
             {list.map((e) => (
               <button
                 key={e.id}
@@ -61,11 +61,11 @@ export default function ResearchLabView() {
                   setCreating(false);
                   openExperiment(e.id);
                 }}
-                className={cx('block w-full rounded px-2 py-1.5 text-left text-[11px]', e.id === selectedId ? 'bg-[#161616] text-white' : 'hover:bg-[#121212]')}
+                className={cx('press block w-full rounded-lg px-3 py-2.5 text-left text-[13px]', e.id === selectedId ? 'bg-terminal-raised' : 'hover:bg-white/[0.04]')}
               >
                 <div className="flex justify-between gap-2">
-                  <span className="truncate font-bold">{e.name}</span>
-                  <span className={cx('uppercase', STATUS_STYLE[e.status])}>{e.status}</span>
+                  <span className="truncate font-semibold">{e.name}</span>
+                  <span className={cx('text-[12px] capitalize', STATUS_STYLE[e.status])}>{e.status}</span>
                 </div>
                 <div className="text-terminal-dim">
                   #{e.id} · {e.variable} · {e.arms} arms × {e.seeds} seeds
@@ -76,20 +76,20 @@ export default function ResearchLabView() {
         )}
       </Section>
 
-      <div className="min-w-0 space-y-3">
+      <div className="min-w-0 space-y-6">
         {creating ? (
           <CreateExperiment onDone={() => setCreating(false)} />
         ) : selectedId === null ? (
-          <Section title="RESEARCH LAB">
-            <p className="text-[12px] leading-relaxed text-terminal-dim">
+          <Section title="Research Lab">
+            <p className="max-w-[72ch] text-[14px] leading-relaxed text-terminal-soft">
               Controlled experiment worlds (VISION Mode B): each experiment varies one variable across arms and runs every arm on the same
               seeds, independent of the live world. Funds trade on their deterministic policies — no model calls, no spend. Pick an
-              experiment, or create one with the lab admin token.
+              experiment, or create one with New experiment and the lab admin token.
             </p>
           </Section>
         ) : !detail ? (
           <Section title="EXPERIMENT">
-            <div className="p-6 text-center text-[12px] text-terminal-dim">Loading experiment…</div>
+            <div className="p-6 text-center text-[13px] text-terminal-dim">Loading experiment…</div>
           </Section>
         ) : (
           <ExperimentResultView d={detail} />
@@ -103,28 +103,28 @@ function ExperimentResultView({ d }: { d: ExperimentDetail }) {
   const r = d.result;
   return (
     <>
-      <Section title={`EXPERIMENT #${d.id}`} right={<span className={cx('uppercase', STATUS_STYLE[d.status])}>{d.status}</span>}>
-        <div className="mb-2 text-[13px] font-bold">{d.name}</div>
-        <dl className="grid grid-cols-[150px_1fr] gap-y-1 text-[11px]">
-          <dt className="text-terminal-dim">VARIABLE</dt>
+      <Section title={`Experiment #${d.id}`} right={<span className={cx('text-[12px] font-medium capitalize', STATUS_STYLE[d.status])}>{d.status}</span>}>
+        <div className="mb-4 text-[20px] font-semibold tracking-[-0.015em]">{d.name}</div>
+        <dl className="grid grid-cols-[160px_1fr] gap-y-2.5 text-[13px]">
+          <dt className="text-terminal-dim">Variable</dt>
           <dd>{d.variable}</dd>
-          <dt className="text-terminal-dim">BASE</dt>
+          <dt className="text-terminal-dim">Base</dt>
           <dd>
             {d.spec
               ? `${d.spec.base.funds.map((k) => FUND_NAME[k] ?? k).join(', ')} · director ${d.spec.base.directorMode} · cadence ${d.spec.base.decisionEveryTicks ?? 'registry'} · ${d.spec.base.ticks} ticks`
               : '—'}
           </dd>
-          <dt className="text-terminal-dim">SEEDS</dt>
+          <dt className="text-terminal-dim">Seeds</dt>
           <dd>{d.spec?.seeds.join(', ') ?? '—'}</dd>
-          <dt className="text-terminal-dim">CONFIG HASH</dt>
+          <dt className="text-terminal-dim">Config hash</dt>
           <dd className="font-mono">{d.manifest?.configHash ?? '—'}</dd>
-          <dt className="text-terminal-dim">WORLD CONSTANTS</dt>
+          <dt className="text-terminal-dim">World constants</dt>
           <dd className="font-mono">{d.manifest?.worldConstantsHash ?? '—'}</dd>
-          <dt className="text-terminal-dim">FUND PROFILES</dt>
+          <dt className="text-terminal-dim">Fund profiles</dt>
           <dd className="font-mono">
             {d.manifest ? Object.entries(d.manifest.fundProfileHashes).map(([k, h]) => `${k} ${h}`).join(' · ') : '—'}
           </dd>
-          <dt className="text-terminal-dim">BRAINS</dt>
+          <dt className="text-terminal-dim">Brains</dt>
           <dd>Deterministic policies only (no model calls)</dd>
         </dl>
         {d.error && <div className="mt-2 text-[11px] text-terminal-red">Failed: {d.error}</div>}
@@ -132,7 +132,7 @@ function ExperimentResultView({ d }: { d: ExperimentDetail }) {
 
       {!r ? (
         <Section title="RESULTS">
-          <div className="p-6 text-center text-[12px] text-terminal-dim">
+          <div className="p-6 text-center text-[13px] text-terminal-dim">
             {d.status === 'failed' ? 'No results.' : 'Waiting for the runner…'}
           </div>
         </Section>
@@ -140,11 +140,11 @@ function ExperimentResultView({ d }: { d: ExperimentDetail }) {
         <>
           <Section title="RESULTS BY ARM">
             <div className="overflow-x-auto">
-              <table className="w-full text-[11px]">
+              <table className="data-table w-full text-[13px]">
                 <thead>
                   <tr>
-                    {['ARM', 'FUND', 'N', 'RETURN (MEAN ± SD)', 'MAX DD', 'SHARPE', 'SURVIVAL', 'Δ VS BASELINE', 'WINS'].map((h) => (
-                      <th key={h} className="px-2 py-1 text-left font-normal text-terminal-dim">{h}</th>
+                    {['Arm', 'Fund', 'n', 'Return (mean ± sd)', 'Max DD', 'Sharpe', 'Survival', 'Δ vs baseline', 'Wins'].map((h) => (
+                      <th key={h}>{h}</th>
                     ))}
                   </tr>
                 </thead>
@@ -152,21 +152,21 @@ function ExperimentResultView({ d }: { d: ExperimentDetail }) {
                   {r.arms.flatMap((arm) =>
                     arm.funds.map((f, fi) => (
                       <tr key={`${arm.label}-${f.key}`} className={cx(fi === 0 && 'border-t border-terminal-border')}>
-                        <td className="px-2 py-1 text-terminal-dim">{fi === 0 ? arm.label : ''}</td>
-                        <td className="px-2 py-1 font-bold">{f.name}</td>
-                        <td className="px-2 py-1 tabular-nums">{f.n}</td>
-                        <td className={cx('px-2 py-1 tabular-nums', f.totalReturn.mean !== null && (f.totalReturn.mean >= 0 ? 'text-terminal-green' : 'text-terminal-red'))}>
+                        <td className="text-terminal-dim">{fi === 0 ? arm.label : ''}</td>
+                        <td className="font-semibold">{f.name}</td>
+                        <td>{f.n}</td>
+                        <td className={cx(f.totalReturn.mean !== null && (f.totalReturn.mean >= 0 ? 'text-terminal-green' : 'text-terminal-red'))}>
                           {pct(f.totalReturn.mean, 2)}
                           {f.totalReturn.std !== null && <span className="text-terminal-dim"> ± {pct(f.totalReturn.std, 2)}</span>}
                         </td>
-                        <td className="px-2 py-1 tabular-nums">{pct(f.maxDrawdown.mean)}</td>
-                        <td className="px-2 py-1 tabular-nums">{f.sharpe.mean === null ? '—' : fmtNum(f.sharpe.mean, 3)}</td>
-                        <td className={cx('px-2 py-1 tabular-nums', f.survival < 1 && 'text-terminal-red')}>{pct(f.survival, 0)}</td>
-                        <td className="px-2 py-1 tabular-nums">
+                        <td>{pct(f.maxDrawdown.mean)}</td>
+                        <td>{f.sharpe.mean === null ? '—' : fmtNum(f.sharpe.mean, 3)}</td>
+                        <td className={cx(f.survival < 1 && 'text-terminal-red')}>{pct(f.survival, 0)}</td>
+                        <td>
                           {f.vsBaseline ? signedPct(f.vsBaseline.meanDiff) : <span className="text-terminal-dim">baseline</span>}
                           {f.baselineLabel && <span className="block text-[10px] text-terminal-dim">vs {f.baselineLabel}</span>}
                         </td>
-                        <td className="px-2 py-1 tabular-nums">{f.vsBaseline ? `${f.vsBaseline.wins}/${f.vsBaseline.pairs}` : '—'}</td>
+                        <td>{f.vsBaseline ? `${f.vsBaseline.wins}/${f.vsBaseline.pairs}` : '—'}</td>
                       </tr>
                     )),
                   )}
@@ -183,16 +183,16 @@ function ExperimentResultView({ d }: { d: ExperimentDetail }) {
           </Section>
 
           <Section title="NAV — FIRST SEED">
-            <div className="grid gap-3 md:grid-cols-2">
+            <div className="grid gap-6 md:grid-cols-2">
               {r.series.map((arm) => (
                 <div key={arm.label}>
-                  <div className="mb-1 text-[11px] text-terminal-dim">{arm.label}</div>
-                  <svg viewBox="0 0 300 80" className="h-20 w-full rounded bg-[#0b0b0b]" role="img" aria-label={`NAV of each fund in ${arm.label}`}>
+                  <div className="mb-2 text-[12px] font-medium text-terminal-soft">{arm.label}</div>
+                  <svg viewBox="0 0 300 80" className="h-24 w-full rounded-xl bg-black/30" role="img" aria-label={`NAV of each fund in ${arm.label}`}>
                     {arm.funds.map((f, i) => (
-                      <path key={f.key} d={sparkPath(f.navs, 300, 80)} fill="none" stroke={SERIES_COLORS[i % SERIES_COLORS.length]} strokeWidth="1.2" />
+                      <path key={f.key} d={sparkPath(f.navs, 300, 80)} fill="none" stroke={SERIES_COLORS[i % SERIES_COLORS.length]} strokeWidth="1.5" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
                     ))}
                   </svg>
-                  <div className="mt-1 flex flex-wrap gap-x-3 text-[10px]">
+                  <div className="mt-2 flex flex-wrap gap-x-4 text-[11px]">
                     {arm.funds.map((f, i) => (
                       <span key={f.key} style={{ color: SERIES_COLORS[i % SERIES_COLORS.length] }}>{FUND_NAME[f.key] ?? f.key}</span>
                     ))}
@@ -203,7 +203,7 @@ function ExperimentResultView({ d }: { d: ExperimentDetail }) {
             <div className="mt-1 text-[10px] text-terminal-dim">Each line is scaled to its own range.</div>
           </Section>
 
-          <Section title="RUNS (REPRODUCIBILITY)">
+          <Section title="Runs (reproducibility)">
             <div className="space-y-1 text-[11px]">
               {r.runs.map((a) => (
                 <div key={a.label}>
@@ -219,8 +219,8 @@ function ExperimentResultView({ d }: { d: ExperimentDetail }) {
             </div>
           </Section>
 
-          <Section title="LIMITATIONS">
-            <ul className="list-disc space-y-1 pl-5 text-[11px] text-terminal-dim">
+          <Section title="Limitations">
+            <ul className="list-disc space-y-1.5 pl-5 text-[13px] leading-relaxed text-terminal-dim">
               <li>n = number of seeds. Mean ± sample standard deviation; Δ is paired by seed against the fund's baseline — the first arm that contains it. This is not a significance test.</li>
               <li>Policy-only worlds: funds use their deterministic policies, so these results compare rules and world settings, not language models.</li>
               <li>Sharpe and drawdown are per NAV snapshot (every 3 ticks) and not annualised.</li>
@@ -280,16 +280,16 @@ function CreateExperiment({ onDone }: { onDone: () => void }) {
     else setError(r.error);
   };
 
-  const input = 'w-full rounded border border-terminal-border bg-[#0b0b0b] px-2 py-1 text-[12px] text-white';
+  const input = 'w-full rounded-lg border border-terminal-border bg-black/30 px-3 py-2 text-[13px] text-terminal-text transition-colors focus:border-terminal-accent/60 focus:outline-none';
   return (
     <Section title="NEW EXPERIMENT">
-      <div className="grid gap-3 text-[11px] md:grid-cols-2">
+      <div className="grid gap-5 text-[12px] md:grid-cols-2">
         <label className="space-y-1">
-          <span className="text-terminal-dim">NAME</span>
+          <span className="text-terminal-dim">Name</span>
           <input className={input} value={name} maxLength={80} onChange={(e) => setName(e.target.value)} placeholder="Director on vs off" />
         </label>
         <label className="space-y-1">
-          <span className="text-terminal-dim">VARIABLE (ONE PER EXPERIMENT)</span>
+          <span className="text-terminal-dim">Variable (one per experiment)</span>
           <select className={input} value={variable} onChange={(e) => setVariable(e.target.value as ExperimentVariable)}>
             {VARIABLES.map((v) => (
               <option key={v.value} value={v.value}>{v.label}</option>
@@ -297,7 +297,7 @@ function CreateExperiment({ onDone }: { onDone: () => void }) {
           </select>
         </label>
         <fieldset className="space-y-1">
-          <legend className="text-terminal-dim">FUNDS (BASE)</legend>
+          <legend className="text-terminal-dim">Funds (base)</legend>
           {FUND_PROFILES.map((p) => (
             <label key={p.key} className="flex items-center gap-2">
               <input
@@ -312,7 +312,7 @@ function CreateExperiment({ onDone }: { onDone: () => void }) {
         <div className="space-y-2">
           {variable !== 'directorMode' && (
             <label className="block space-y-1">
-              <span className="text-terminal-dim">DIRECTOR (BASE)</span>
+              <span className="text-terminal-dim">Director (base)</span>
               <select className={input} value={directorMode} onChange={(e) => setDirectorMode(e.target.value as 'none' | 'rule')}>
                 <option value="rule">rule</option>
                 <option value="none">none</option>
@@ -321,7 +321,7 @@ function CreateExperiment({ onDone }: { onDone: () => void }) {
           )}
           {variable === 'decisionEveryTicks' && (
             <label className="block space-y-1">
-              <span className="text-terminal-dim">CADENCE VALUES (COMMA-SEPARATED; "registry" = each fund's own)</span>
+              <span className="text-terminal-dim">Cadence values (comma-separated; "registry" = each fund's own)</span>
               <input className={input} value={cadenceValues} onChange={(e) => setCadenceValues(e.target.value)} />
             </label>
           )}
@@ -330,21 +330,21 @@ function CreateExperiment({ onDone }: { onDone: () => void }) {
           </div>
         </div>
         <label className="space-y-1">
-          <span className="text-terminal-dim">TICKS PER RUN (MAX {EXPERIMENT_MAX_TICKS})</span>
+          <span className="text-terminal-dim">Ticks per run (max {EXPERIMENT_MAX_TICKS})</span>
           <input className={input} type="number" min={10} max={EXPERIMENT_MAX_TICKS} value={ticks} onChange={(e) => setTicks(Number(e.target.value))} />
         </label>
         <div className="grid grid-cols-2 gap-2">
           <label className="space-y-1">
-            <span className="text-terminal-dim">SEEDS (MAX {EXPERIMENT_MAX_SEEDS})</span>
+            <span className="text-terminal-dim">Seeds (max {EXPERIMENT_MAX_SEEDS})</span>
             <input className={input} type="number" min={1} max={EXPERIMENT_MAX_SEEDS} value={seedCount} onChange={(e) => setSeedCount(Number(e.target.value))} />
           </label>
           <label className="space-y-1">
-            <span className="text-terminal-dim">FIRST SEED</span>
+            <span className="text-terminal-dim">First seed</span>
             <input className={input} type="number" min={0} value={firstSeed} onChange={(e) => setFirstSeed(Number(e.target.value))} />
           </label>
         </div>
         <label className="space-y-1 md:col-span-2">
-          <span className="text-terminal-dim">LAB ADMIN TOKEN (SENT WITH THIS REQUEST ONLY, NEVER STORED)</span>
+          <span className="text-terminal-dim">Lab admin token (sent with this request only, never stored)</span>
           <input className={input} type="password" autoComplete="off" value={token} onChange={(e) => setToken(e.target.value)} />
         </label>
       </div>
@@ -353,9 +353,9 @@ function CreateExperiment({ onDone }: { onDone: () => void }) {
         type="button"
         disabled={busy || token.length === 0}
         onClick={() => void submit()}
-        className="mt-3 rounded border border-terminal-border px-3 py-1.5 text-[11px] tracking-wider text-white hover:bg-[#161616] disabled:cursor-default disabled:text-[#3a3a3a]"
+        className="press mt-5 rounded-full bg-terminal-accent px-5 py-2 text-[13px] font-medium text-white hover:bg-terminal-accent/85 disabled:cursor-default disabled:bg-terminal-raised disabled:text-terminal-faint"
       >
-        {busy ? 'QUEUING…' : 'QUEUE EXPERIMENT'}
+        {busy ? 'Queuing…' : 'Queue experiment'}
       </button>
     </Section>
   );

@@ -1,5 +1,6 @@
 import { useGameStore } from "../store/gameStore";
 import type { Position } from "@black-sheep/engine/types";
+import { cx } from "./fmt";
 
 function exposurePct(pos: Position, price: number, nav: number): number {
   if (nav <= 0) return 0;
@@ -23,16 +24,14 @@ export default function ExposureWarning() {
   if (alerts.length === 0) return null;
 
   return (
-    <div className="space-y-1">
+    <div className="space-y-2" role="status">
       {alerts.map((a) => {
         const sev = a.pct > 85 ? "critical" : a.pct > 70 ? "high" : "warn";
-        const col = sev === "critical" ? "text-terminal-red" : sev === "high" ? "text-[#ff9800]" : "text-[#ffcc00]";
-        const bg = sev === "critical" ? "bg-[#1a0000] border-terminal-red" : sev === "high" ? "bg-[#1a1200] border-[#ff9800]" : "bg-[#1a1a00] border-[#ffcc00]";
-        const pulse = sev === "critical" ? "animate-pulse" : sev === "high" ? "animate-pulse-slow" : "";
+        const tone = sev === "critical" ? "border-terminal-red/40 bg-terminal-red/10 text-terminal-red animate-pulse" : sev === "high" ? "border-terminal-warn/40 bg-terminal-warn/10 text-terminal-warn" : "border-terminal-caution/30 bg-terminal-caution/10 text-terminal-caution";
         return (
-          <div key={a.ticker} className={`flex items-center justify-between rounded border px-2 py-1 text-[11px] ${bg} ${pulse}`}>
-            <span className={col + " font-bold"}>WARNING</span>
-            <span className={col}>You are {Math.round(a.pct)}% exposed to {a.name}</span>
+          <div key={a.ticker} className={cx("flex items-center gap-3 rounded-xl border px-4 py-2.5 text-[13px]", tone)}>
+            <span className="font-semibold">Concentration</span>
+            <span>{Math.round(a.pct)}% of NAV is in {a.name}</span>
           </div>
         );
       })}

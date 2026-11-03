@@ -11,23 +11,21 @@ export default function PositionRow({ position }: Props) {
   const pnlPct = position.entryPrice > 0 ? (position.direction === 'long' ? (price - position.entryPrice) / position.entryPrice : (position.entryPrice - price) / position.entryPrice) * 100 : 0;
   const risk = nav > 0 ? (notional / nav) * 100 : 0;
   const long = position.direction === 'long';
-  const riskCol = risk < 30 ? 'bg-terminal-green' : risk < 60 ? 'bg-[#ff9800]' : 'bg-terminal-red';
-  const rowBg = long ? 'bg-[#0c1a10]/60 border-l-2 border-l-terminal-green' : 'bg-[#1c0f0f]/60 border-l-2 border-l-terminal-red';
-  const blocks = Math.round(Math.min(100, risk) / 100 * 7);
+  const riskCol = risk < 30 ? 'bg-terminal-green' : risk < 60 ? 'bg-terminal-warn' : 'bg-terminal-red';
+  const pc = pnl >= 0 ? 'text-terminal-green' : 'text-terminal-red';
   return (
-    <tr className={cx('border-b border-terminal-border text-[11px]', rowBg)}>
-      <td className="px-2 py-2 font-bold">{position.ticker}</td>
-      <td className={cx('px-2 py-2 font-semibold', long ? 'text-terminal-green' : 'text-terminal-red')}>{long ? 'LONG' : 'SHORT'}</td>
-      <td className="px-2 py-2">{fmtMoney(notional)}</td>
-      <td className="px-2 py-2 text-terminal-dim">${position.entryPrice.toFixed(2)}</td>
-      <td className="px-2 py-2">${price.toFixed(2)}</td>
-      <td className={cx('px-2 py-2 font-semibold', pnl >= 0 ? 'text-terminal-green' : 'text-terminal-red')}>{fmtSigned(pnl)}</td>
-      <td className={cx('px-2 py-2', pnl >= 0 ? 'text-terminal-green' : 'text-terminal-red')}>{fmtPct(pnlPct)}</td>
-      <td className="px-2 py-2">
-        <span className="inline-flex items-center gap-1.5">
-          <span className="inline-flex gap-[2px]">{Array.from({ length: 7 }).map((_, i) => (<span key={i} className={cx('h-2 w-2 rounded-[1px]', i < blocks ? riskCol : 'bg-[#242424]')} />))}</span>
-          <span className={cx(risk >= 60 ? 'font-bold text-[#ffb74d]' : 'text-terminal-dim')}>{Math.round(risk)}%</span>
-          {risk >= 60 && <span>⚠</span>}
+    <tr className="hover:bg-white/[0.03]">
+      <td className="font-semibold">{position.ticker}</td>
+      <td><span className={cx('rounded-md px-2 py-0.5 text-[11px] font-medium', long ? 'bg-terminal-green/10 text-terminal-green' : 'bg-terminal-red/10 text-terminal-red')}>{long ? 'Long' : 'Short'}</span></td>
+      <td className="text-right">{fmtMoney(notional)}</td>
+      <td className="text-right text-terminal-dim">${position.entryPrice.toFixed(2)}</td>
+      <td className="text-right">${price.toFixed(2)}</td>
+      <td className={cx('text-right font-medium', pc)}>{fmtSigned(pnl)}</td>
+      <td className={cx('text-right', pc)}>{fmtPct(pnlPct)}</td>
+      <td>
+        <span className="flex items-center gap-2" title="Position value as a share of NAV">
+          <span className="h-1 w-16 rounded-full bg-white/[0.08]"><span className={cx('block h-1 rounded-full', riskCol)} style={{ width: `${Math.min(100, risk)}%` }} /></span>
+          <span className={cx('text-[12px]', risk >= 60 ? 'font-semibold text-terminal-warn' : 'text-terminal-dim')}>{Math.round(risk)}%</span>
         </span>
       </td>
     </tr>

@@ -1,5 +1,12 @@
 # Decisions
 
+### D-037 · 2026-11-03 · Claude Opus 5.5 (Claude Code)
+**Decision:** The observer UI moves from a green-on-black mono terminal to an Apple-style dark interface. The palette is Apple's dark system colours, defined once as CSS variables in `src/index.css`; the Tailwind `terminal-*` names point at them, so SVG strokes and classes share one source. Body text uses the system font (SF on macOS, Segoe UI Variable on Windows) with tabular figures, and mono is kept only for hashes and tool I/O. Shared `.panel`, `.label`, `.data-table` and `.press` classes replace roughly 20 copies of the same utility strings. The header names the current view. The chart gains hover read-out, gradient fill and min/max labels. Views cross-fade on switch, and reduced motion, reduced transparency and increased contrast are honoured.
+**Context:** User request: "Apple meets institutional financial intelligence", every screen, all functionality preserved.
+**Removed, as non-functional or fabricated:** the chart's 1D–ALL timeframe buttons (state never used); its fake 09:30–16:00 axis; Volume and Market Cap (computed as price × constant); the news panel's "ALL NEWS ▾" (no menu); RiskGauge's ⓘ (no tooltip); the duplicate NAV block in the thesis panel (Hero already shows it). Every data field and workflow is unchanged.
+**Rejected:** renaming `terminal-*` tokens to semantic names (about 260 call sites of churn, no behaviour change); adding a motion or chart library (springs don't help a poll-driven, non-gestural UI; SVG is enough).
+**Revisit if:** a light theme is wanted (redefine the variables under `prefers-color-scheme: light`), or the app must work at phone width (the sidebar is fixed at 232 px).
+
 ### D-036 · 2026-11-03 · Claude Opus 5.5 (Claude Code)
 **Decision:** Add `embedded-postgres` (dev dependency, pinned `16.14.0-beta.17`; the package tags every release "beta") and `npm run db:local` (`scripts/local-db.ts`): a real Postgres 16 from npm binaries on :5432 with docker-compose's credentials, data in git-ignored `.pgdata/`. Docker stays supported (`npm run db:up`).
 **Context:** User asked for a demoable build where only connecting APIs is left. Docker Desktop on this machine fails to start its engine (WSL bootstrap error), which had blocked every live-DB check since Stage 2.

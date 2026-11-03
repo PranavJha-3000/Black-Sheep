@@ -20,6 +20,16 @@ import { ANALYTICS_POLL_MS, LAB_POLL_MS, STARTING_CAPITAL } from '../../config/g
 
 /** Observer navigation (VISION §13). TIMELINE comes later. */
 export type ObserverView = 'world' | 'funds' | 'fund' | 'activity' | 'analytics' | 'lab';
+/** Sidebar order; a null view is listed but not live yet. */
+export const NAV_ITEMS: { label: string; view: ObserverView | null }[] = [
+  { label: 'World', view: 'world' },
+  { label: 'Funds', view: 'funds' },
+  { label: 'Fund Detail', view: 'fund' },
+  { label: 'Activity', view: 'activity' },
+  { label: 'Timeline', view: null },
+  { label: 'Research Lab', view: 'lab' },
+  { label: 'Analytics', view: 'analytics' },
+];
 
 export interface GameStoreState {
   view: ObserverView;

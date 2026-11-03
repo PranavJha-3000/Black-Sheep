@@ -8,20 +8,22 @@ export default function Mid() {
   const gross = useGameStore((s) => s.grossExposure);
   const cash = useGameStore((s) => s.cash);
   return (
-    <div className="grid grid-cols-12 gap-2">
-      <div className="col-span-8 rounded border border-terminal-border bg-terminal-panel p-3">
-        <div className="mb-2 text-[11px] tracking-widest text-terminal-dim">POSITIONS ({positions.length})</div>
-        {positions.length === 0 ? (<div className="rounded border border-dashed border-[#2a2a2a] p-6 text-center text-[12px] text-terminal-dim">No open positions.</div>) : (<PositionsTable positions={positions} />)}
-        <div className="mt-1 text-[10px] text-terminal-dim">Gross {fmtMoney(gross)} Cash {fmtMoney(cash)}</div>
+    <div className="grid grid-cols-12 items-start gap-6">
+      <div className="panel col-span-12 lg:col-span-8">
+        <div className="mb-4 flex items-baseline justify-between">
+          <span className="label">Positions · {positions.length}</span>
+          <span className="text-[12px] text-terminal-dim">Gross {fmtMoney(gross)} · Cash {fmtMoney(cash)}</span>
+        </div>
+        {positions.length === 0 ? (<div className="py-10 text-center text-[13px] text-terminal-dim">No open positions.</div>) : (<PositionsTable positions={positions} />)}
       </div>
-      <div className="col-span-4 min-h-[280px]"><MarketNews /></div>
+      <div className="col-span-12 min-h-[280px] lg:col-span-4"><MarketNews /></div>
     </div>
   );
 }
 function PositionsTable(props: { positions: Position[] }) {
   return (
-    <table className="w-full border-collapse">
-      <thead><tr className="text-left text-[10px] text-terminal-dim"><th className="px-2 py-1 font-normal">TICKER</th><th className="px-2 py-1 font-normal">DIR</th><th className="px-2 py-1 font-normal">SIZE</th><th className="px-2 py-1 font-normal">ENTRY</th><th className="px-2 py-1 font-normal">CUR</th><th className="px-2 py-1 font-normal">PNL</th><th className="px-2 py-1 font-normal">PCT</th><th className="px-2 py-1 font-normal">RISK</th></tr></thead>
+    <table className="data-table w-full border-collapse text-[13px]">
+      <thead><tr><th>Ticker</th><th>Side</th><th className="!text-right">Size</th><th className="!text-right">Entry</th><th className="!text-right">Price</th><th className="!text-right">P&amp;L</th><th className="!text-right">Return</th><th>Weight</th></tr></thead>
       <tbody>{props.positions.map((x) => (<PositionRow key={x.id} position={x} />))}</tbody>
     </table>
   );

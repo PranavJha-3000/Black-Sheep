@@ -1,5 +1,5 @@
 import { useGameStore } from "../store/gameStore";
-import { fmtMoney, fmtPct } from "./fmt";
+import { fmtMoney, fmtPct, fmtSigned, cx } from "./fmt";
 
 /**
  * Compact fund summary panel — accessible any time from the fund view.
@@ -18,31 +18,19 @@ export default function FundSummaryPanel() {
   const isUp = pnl >= 0;
 
   return (
-    <div className="rounded border border-terminal-border bg-terminal-panel p-3">
-      <div className="text-[10px] uppercase tracking-widest text-terminal-dim">
-        {liquidated ? "Final Results" : "Fund Summary"}
-      </div>
-      <div className="mt-1 text-sm font-bold">{name}</div>
+    <div className="rounded-xl bg-white/[0.03] p-4">
+      <div className="text-[11px] text-terminal-dim">{liquidated ? "Final results" : "In focus"}</div>
+      <div className="mt-0.5 truncate text-[13px] font-semibold">{name}</div>
       {liquidated && (
-        <div className="mt-1 text-[10px] font-bold tracking-wider text-terminal-red">
-          LIQUIDATED — {liquidationCause ?? "UNKNOWN"}
+        <div className="mt-1 text-[11px] font-medium text-terminal-red">
+          Liquidated — {liquidationCause ?? "unknown"}
         </div>
       )}
-      <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
-        <div className="text-terminal-dim">NAV</div>
-        <div className="text-right font-bold">{fmtMoney(nav)}</div>
-        <div className="text-terminal-dim">PnL</div>
-        <div className={`text-right font-bold ${isUp ? "text-terminal-green" : "text-terminal-red"}`}>
-          {fmtSigned(pnl)} {fmtPct(pnlPct)}
-        </div>
-        <div className="text-terminal-dim">Positions</div>
-        <div className="text-right">{positions.length} open</div>
+      <div className="mt-3 text-[20px] font-semibold leading-none tracking-[-0.02em]">{fmtMoney(nav)}</div>
+      <div className={cx("mt-1.5 text-[12px] font-medium", isUp ? "text-terminal-green" : "text-terminal-red")}>
+        {fmtSigned(pnl)} · {fmtPct(pnlPct)}
       </div>
+      <div className="mt-3 text-[11px] text-terminal-dim">{positions.length} open position{positions.length === 1 ? "" : "s"}</div>
     </div>
   );
-}
-
-function fmtSigned(n: number, dp = 0): string {
-  const v = Math.abs(n).toLocaleString("en-US", { minimumFractionDigits: dp, maximumFractionDigits: dp });
-  return `${n >= 0 ? "+" : "-"}$${v}`;
 }
