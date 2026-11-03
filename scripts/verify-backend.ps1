@@ -22,8 +22,8 @@ if (-not $healthy) { throw 'Postgres container never became healthy.' }
 Write-Host '   Postgres healthy.'
 
 Write-Host '== 2. Apply migrations (tracked in prisma/migrations) =='
-npx prisma migrate dev --name init
-if ($LASTEXITCODE -ne 0) { throw 'prisma migrate dev failed.' }
+npx prisma migrate deploy
+if ($LASTEXITCODE -ne 0) { throw 'prisma migrate deploy failed.' }
 
 Write-Host '== 3. Game server up =='
 $out = Join-Path $env:TEMP 'bs-server.log'

@@ -3,7 +3,8 @@
 ## Current state
 - Working: **Stage 8 Research Lab foundation complete** (branch `feat/stage8-research-lab`): controlled, policy-only experiment worlds that vary one variable across arms on paired seeds, with a reproducibility manifest, a runner beside the live world, `/lab` routes (create needs `LAB_ADMIN_TOKEN`) and a RESEARCH LAB view (D-032, D-033). The rule Director was recalibrated — it had never fired. Stage 7 (merged): Pure evaluation metrics, per-fund NAV snapshots, `GET /world/analytics` and an ANALYTICS view (D-028); a World Director in the tick loop with `none`/`rule`/`jev` modes (default `rule`, env `DIRECTOR_MODE`) that can only fire validated sector/macro catalog events; the Jev adapter is a disabled stub (D-029). The observer has WORLD, FUNDS, FUND DETAIL, ACTIVITY and ANALYTICS views (D-027). Stages 1–7 are merged to `main`; APEX CAPITAL is retired (D-030).
 - In progress: nothing.
-- Broken: nothing known — typecheck, tests, lint and build green. Live-DB and live-provider behaviour UNVERIFIED (no Postgres, no key used).
+- Demo-ready (2026-11-03): `npm run db:local` gives a real Postgres without Docker (D-036). Verified on it: all 5 migrations apply with no schema drift; server boots, the world ticks unattended, funds trade on policies, a lab experiment ran to `done`, and WORLD/FUNDS/FUND DETAIL/ACTIVITY/RESEARCH LAB/ANALYTICS render real data with no console errors. README has the run steps and the API table.
+- Broken: nothing known — typecheck, tests, lint and build green. Live-provider behaviour UNVERIFIED (no key used).
 - Avoid: Do not duplicate engine logic — import `@black-sheep/engine/*`. Every async Express route goes through `wrap()`. Prisma pinned to v6. Never call an LLM from the browser (VISION §14.9). Every field added to `buildWorldStatePayload` is public. Run ONE server process per DB. A fund's identity is its registry `name` — renaming an entry starts a new fund.
 
 ## Open items
@@ -25,9 +26,15 @@
 - [ ] `LiquidationLog.rivalContext` is always null (D-019) and `server/auth.ts` / `User` are unused by the client — drop or repurpose in a schema pass.
 - [ ] Dead helper `src/components/fmt.ts` `tickersOf` (zero callers); `server/world.ts` exports `getLiveWorld` with zero callers (kept as the planned accessor).
 - [ ] Engine barrel `packages/engine/src/index.ts` has zero importers but is the package's declared `"."` entry (does not re-export `funds`/`policies`) — decide later.
-- [ ] Live-DB verification still blocked on WSL/Docker (`wsl --install -d Ubuntu`, reboot, then `scripts/verify-backend.ps1`). The init migration exists; run `npx prisma migrate deploy` (not `migrate dev --name init`, which would create a second migration) on first DB boot.
+- [ ] Docker Desktop on the user's machine fails to start its engine (WSL bootstrap error in its log); `npm run db:local` works around it. `scripts/verify-backend.ps1` still needs Docker (now uses `migrate deploy`).
 
 ## Log
+
+### 2026-11-03 · Claude Opus 5.5 (Claude Code) · Demo-ready: Postgres without Docker, first real-DB run
+CHANGED: dev dep `embedded-postgres`; `scripts/local-db.ts` + `npm run db:local`; `.pgdata/` git-ignored; README run steps + API table; `verify-backend.ps1` uses `migrate deploy`.
+WHY: User wants a demoable build where only API connection is left. See D-036.
+VERIFY: `prisma migrate deploy` (5/5) and `migrate diff --exit-code` (no drift) on real Postgres 16; `/health`, `/world/state`, `/world/analytics`, `/world/activity`, `/lab/experiments` 200; POST experiment → `done` in ~1 s; all six views in the browser, no console errors; typecheck, tests, lint, build ✓.
+NOT VERIFIED: any live model call (server ran with `ANTHROPIC_API_KEY` blanked to avoid spend).
 
 ### 2026-11-02 · Claude Opus 5.5 (Claude Code) · Whole-fund margin (free cash backs shorts)
 CHANGED: `checkLiquidation` tests fund equity (NAV) against 25% of current short value; `LIQUIDATION_RULE_VERSION` constant; client `derive.ts` `liquidationAt`; portfolio tests (one existing test's price raised from 400 to 500 so it still breaches under the new rule) + new `src/store/derive.test.ts`.
