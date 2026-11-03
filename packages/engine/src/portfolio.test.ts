@@ -180,12 +180,36 @@ describe('portfolio engine', () => {
       let fund = createFund(1_000_000);
       // $1M short at 285: quantity ~3508.77, marginReserved = $500k
       fund = openPosition(fund, 'NOVA', 'short', 1_000_000, 285);
-      // Price rises to 400: heavy loss on the short
-      const market = marketWithPrice('NOVA', 400);
+      // Price rises to 500: the short has lost ~$755k of the fund's $1M equity.
+      const market = marketWithPrice('NOVA', 500);
       const result = checkLiquidation(fund, market);
       expect(result.atRisk).toBe(true);
-      expect(result.marginUsedPercent).toBeGreaterThan(100);
+      // Equity = $2M cash - 3508.77 x 500 = ~$245.6k; maintenance = 25% of ~$1.754M = ~$438.6k.
+      expect(result.marginUsedPercent).toBeCloseTo((0.25 * 1_754_386) / 245_614 * 100, 0);
       expect(result.message).toContain('LIQUIDATION RISK');
+    });
+
+    it('counts free cash as collateral: a well-capitalised fund survives one bad short (D-035)', () => {
+      let fund = createFund(10_000_000);
+      // $2M short at 285 posts $1M; up 25% its own margin ($1M - $500k) is under 25% of $2.5M.
+      fund = openPosition(fund, 'NOVA', 'short', 2_000_000, 285);
+      const result = checkLiquidation(fund, marketWithPrice('NOVA', 285 * 1.25));
+      expect(result.atRisk).toBe(false);
+      // Equity $9.5M against a $625k requirement.
+      expect(result.marginUsedPercent).toBeCloseTo((625_000 / 9_500_000) * 100, 1);
+    });
+
+    it('a losing long eats the equity that backs the shorts', () => {
+      let fund = createFund(1_000_000);
+      fund = openPosition(fund, 'TITAN', 'long', 900_000, 87);
+      fund = openPosition(fund, 'NOVA', 'short', 200_000, 285);
+      // Shorts flat, TITAN goes to ~zero: equity ~$100k still covers 25% of the $200k short.
+      let market = { ...marketWithPrice('NOVA', 285) };
+      market = { ...market, companies: { ...market.companies, TITAN: { ...market.companies.TITAN, price: 0.01 } } };
+      expect(checkLiquidation(fund, market).atRisk).toBe(false);
+      // Now the short rises 60% too: equity ~$100k - $120k < 25% of $320k.
+      market = { ...market, companies: { ...market.companies, NOVA: { ...market.companies.NOVA, price: 285 * 1.6 } } };
+      expect(checkLiquidation(fund, market).atRisk).toBe(true);
     });
 
     it('does not flag a healthy short position', () => {

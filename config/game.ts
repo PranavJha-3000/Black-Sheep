@@ -51,11 +51,18 @@ export const FLOW_CAP = 50;
  */
 export const INITIAL_MARGIN_RATE = 0.5;
 /**
- * Maintenance margin rate for short positions: the minimum equity (as a
- * fraction of CURRENT notional) that must remain, below which the position is
- * flagged for liquidation. 25% is a realistic maintenance requirement.
+ * Maintenance margin rate for short positions: the fund's whole equity (NAV)
+ * must stay at or above this fraction of its shorts' CURRENT value, or the
+ * fund is liquidated (D-035). 25% is a realistic maintenance requirement.
  */
 export const MAINTENANCE_MARGIN_RATE = 0.25;
+/**
+ * Which liquidation rule the engine applies. Bumped whenever checkLiquidation
+ * changes meaning, so experiment manifests (worldConstantsHash) from different
+ * rules never look comparable. 2 = whole-fund equity backs the shorts (D-035);
+ * 1 = only each short's posted margin did.
+ */
+export const LIQUIDATION_RULE_VERSION = 2;
 
 // --- Rival AI (packages/engine/src/rival.ts) ---
 /** Rival reconsiders its book every N engine ticks. */
@@ -88,11 +95,11 @@ export const POLICY_AGGRESSIVE_EVENT_IMPACT = -2;
 export const POLICY_AGGRESSIVE_EXTENDED = 0.03;
 /**
  * Every policy: only shorts names with per-tick volatility at or below this.
- * A lone short is liquidated after a ~20% adverse move (50% initial vs 25%
- * maintenance margin), and policies only act every 10 ticks. Per-tick noise is
- * uniform on +/-volatility, so the 10-tick sigma is about volatility x 1.83:
- * ~11% for HELX (two sigma reaches the liquidation line before any stop can
- * act, events aside), under 5% at 0.025.
+ * Policies act every 10 ticks and per-tick noise is uniform on +/-volatility,
+ * so the 10-tick sigma is about volatility x 1.83: ~11% for HELX, under 5% at
+ * 0.025. A short in HELX can blow far past its stop before the fund acts.
+ * (Set under the old per-short margin rule, where a ~20% move liquidated the
+ * fund - D-034; since D-035 it limits losses rather than preventing death.)
  */
 export const POLICY_MAX_SHORT_VOLATILITY = 0.025;
 /** Quant: close a position at or below this fractional loss, whatever the flow says. */

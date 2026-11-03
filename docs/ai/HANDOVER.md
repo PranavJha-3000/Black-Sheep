@@ -7,7 +7,6 @@
 - Avoid: Do not duplicate engine logic — import `@black-sheep/engine/*`. Every async Express route goes through `wrap()`. Prisma pinned to v6. Never call an LLM from the browser (VISION §14.9). Every field added to `buildWorldStatePayload` is public. Run ONE server process per DB. A fund's identity is its registry `name` — renaming an entry starts a new fund.
 
 ## Open items
-- [ ] **Margin rule (decision for the user, found while fixing D-034):** a fund is liquidated when its short margin accounts fall below maintenance even if it holds millions in free cash — the engine never posts free cash as extra collateral. D-034 made the policies avoid this; a model-driven fund can still die with 75% of NAV in cash. Changing `checkLiquidation` to count free cash is a world-rule change (affects every fund and past experiment comparisons).
 - [ ] Policy quality: after D-034 the policy funds survive but CROWN MERIDIAN still averages about −5% to −7% over 2000 ticks and HALDEN about −0.5% (seeds 11–40). Aggressive's bad-news short re-fires on the same stale event while it stays in the event buffer.
 - [ ] Stage 8 review minors (deferred): if `requeueInterrupted` fails at boot, `running` rows stay stuck until the next restart, and a second process would re-queue another's running row (wasted, deterministic rerun); a failed `failed`-status write leaves a row `running`; `Bearer` matched case-sensitively and no rate limit on `POST /lab/experiments`; the world-constants hash also covers UI/poll constants (noisy, safe); `openPosition` ids use `Date.now()` — two same-ticker/same-direction positions opened in one millisecond would share an id (current policies never hold such a pair); after a restart with no major event in the last 30 logged, the Director's quiet clock reads quiet immediately (cooldown still applies); the store keeps refetching detail for finished experiments.
 - [ ] Model-backed experiment arms and memory ablations (VISION §10): need the user's spend approval and a per-experiment budget; model calls must run outside any lock.
@@ -29,6 +28,12 @@
 - [ ] Live-DB verification still blocked on WSL/Docker (`wsl --install -d Ubuntu`, reboot, then `scripts/verify-backend.ps1`). The init migration exists; run `npx prisma migrate deploy` (not `migrate dev --name init`, which would create a second migration) on first DB boot.
 
 ## Log
+
+### 2026-11-02 · Claude Opus 5.5 (Claude Code) · Whole-fund margin (free cash backs shorts)
+CHANGED: `checkLiquidation` tests fund equity (NAV) against 25% of current short value; `LIQUIDATION_RULE_VERSION` constant; client `derive.ts` `liquidationAt`; portfolio tests (one existing test's price raised from 400 to 500 so it still breaches under the new rule) + new `src/store/derive.test.ts`.
+WHY: User decision after D-034. See D-035.
+VERIFY: new tests RED on the old rule, GREEN after; `npm test`, typecheck, lint, build ✓. Experiment worlds: 0/240 aggressive/quant liquidations on seeds 1–40.
+NOT VERIFIED: the live world's liquidation path against a DB (`server/world.ts` calls the same `checkLiquidation`).
 
 ### 2026-11-02 · Claude Opus 5.5 (Claude Code) · Policy funds stop getting margin-liquidated
 CHANGED: `policies.ts` — no shorts above `POLICY_MAX_SHORT_VOLATILITY`, stops before profit-taking (worst first), quant stop `POLICY_QUANT_STOP_LOSS`; constants in `config/game.ts`; policy tests + a seeded survival test in `experiment.test.ts`.
