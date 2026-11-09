@@ -18,6 +18,8 @@ const BRAIN_OPTIONS: { value: string; label: string }[] = [
   { value: 'policy', label: 'Policy' },
   ...Object.entries(MODEL_REGISTRY).map(([id, m]) => ({ value: id, label: m.displayName })),
 ];
+const fmtBrains = (m: Record<string, string>) =>
+  Object.keys(m).length ? Object.entries(m).map(([k, b]) => `${FUND_NAME[k] ?? k}: ${brainLabel(b)}`).join(' · ') : 'Deterministic policies';
 const brainLabel = (b: string) => BRAIN_OPTIONS.find((o) => o.value === b)?.label ?? b;
 const FUND_NAME: Record<string, string> = Object.fromEntries(FUND_PROFILES.map((p) => [p.key, p.name]));
 const STATUS_STYLE: Record<string, string> = {
@@ -140,10 +142,10 @@ function ExperimentResultView({ d }: { d: ExperimentDetail }) {
           </dd>
           <dt className="text-terminal-dim">Brains</dt>
           <dd>
-            {Object.keys(d.spec?.base.brains ?? {}).length > 0
-              ? Object.entries(d.spec?.base.brains ?? {}).map(([k, b]) => `${FUND_NAME[k] ?? k}: ${brainLabel(b)}`).join(' · ')
-              : 'Deterministic policies'}
-            {d.spec?.variable === 'brains' && ' (varied across arms)'}
+            {d.spec?.variable === 'brains'
+              ? // Each arm value replaces the base map, so list what each arm actually ran.
+                d.spec.values.map((v) => fmtBrains(v as Record<string, string>)).join(' | ')
+              : fmtBrains(d.spec?.base.brains ?? {})}
           </dd>
           {r && (
             <>
@@ -303,12 +305,14 @@ function CreateExperiment({ onDone }: { onDone: () => void }) {
       .map((v) => (v === 'registry' ? null : Number(v)));
   };
 
-  const usesModel = Object.entries(baseBrains).some(([k, b]) => funds.includes(k) && b !== 'policy') || (variable === 'brains' && armBrains.some((b) => b !== 'policy'));
+  // Arm brain values replace the base map, so under the brains variable only they count.
+  const baseModels = variable === 'brains' ? {} : Object.fromEntries(Object.entries(baseBrains).filter(([k]) => funds.includes(k)));
+  const usesModel = variable === 'brains' ? armBrains.some((b) => b !== 'policy') : Object.values(baseModels).some((b) => b !== 'policy');
   const buildBody = () => ({
     name,
     variable,
     values: values(),
-    base: { funds, directorMode, decisionEveryTicks: null, ticks, brains: Object.fromEntries(Object.entries(baseBrains).filter(([k]) => funds.includes(k))) },
+    base: { funds, directorMode, decisionEveryTicks: null, ticks, brains: baseModels },
     seeds: Array.from({ length: seedCount }, (_, i) => firstSeed + i),
     ...(usesModel ? { budgetUsd: budget } : {}),
   });
@@ -316,10 +320,8 @@ function CreateExperiment({ onDone }: { onDone: () => void }) {
   // Live worst-case estimate from the server's dry run (never duplicated client-side); needs the token.
   const bodyKey = JSON.stringify(buildBody());
   useEffect(() => {
-    if (!usesModel || token.length === 0) {
-      setEstimate(null);
-      return;
-    }
+    setEstimate(null);
+    if (!usesModel || token.length === 0) return;
     let stale = false;
     const t = setTimeout(() => void estimateExperiment(JSON.parse(bodyKey), token).then((r) => !stale && setEstimate(r)), 400);
     return () => {
@@ -417,6 +419,7 @@ function CreateExperiment({ onDone }: { onDone: () => void }) {
               .join(' | ')}
           </div>
         </div>
+        {variable !== 'brains' && (
         <fieldset className="space-y-1">
           <legend className="text-terminal-dim">Brain per fund (base)</legend>
           {FUND_PROFILES.filter((p) => funds.includes(p.key)).map((p) => (
@@ -430,6 +433,7 @@ function CreateExperiment({ onDone }: { onDone: () => void }) {
             </label>
           ))}
         </fieldset>
+        )}
         {usesModel && (
           <div className="space-y-1">
             <label className="block space-y-1">

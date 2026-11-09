@@ -290,8 +290,7 @@ describe('dryRunExperiment', () => {
   const modelBody = () =>
     body({ base: { funds: ALL, directorMode: 'rule', decisionEveryTicks: null, ticks: 200, brains: { 'crown-meridian': 'claude-haiku-5-5' } }, budgetUsd: 5 });
 
-  it('dry run validates and does not store', () => {
-    // Pure: it only returns a number, so there is nothing to store; the route is a thin wrapper.
+  it('dry run validates and prices a request', () => {
     const ok = dryRunExperiment(modelBody(), KEYED);
     expect(ok.ok && ok.estimateUsd).toBeGreaterThan(0);
     expect(dryRunExperiment(body(), KEYED)).toEqual({ ok: true, estimateUsd: 0 });
