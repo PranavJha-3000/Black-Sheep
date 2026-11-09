@@ -1,0 +1,30 @@
+{
+  "name": "study:H1:haiku:s2",
+  "variable": "brains",
+  "values": [
+    {},
+    {
+      "crown-meridian": "claude-haiku-5-5"
+    }
+  ],
+  "base": {
+    "funds": [
+      "sterling-vale",
+      "halden-whitmore",
+      "crown-meridian"
+    ],
+    "directorMode": "rule",
+    "decisionEveryTicks": 10,
+    "ticks": 500,
+    "brains": {},
+    "memory": "none"
+  },
+  "seeds": [
+    6,
+    7,
+    8,
+    9,
+    10
+  ],
+  "budgetUsd": 3
+}

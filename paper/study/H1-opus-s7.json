@@ -1,0 +1,26 @@
+{
+  "name": "study:H1:opus:s7",
+  "variable": "brains",
+  "values": [
+    {},
+    {
+      "crown-meridian": "claude-opus-5-5"
+    }
+  ],
+  "base": {
+    "funds": [
+      "sterling-vale",
+      "halden-whitmore",
+      "crown-meridian"
+    ],
+    "directorMode": "rule",
+    "decisionEveryTicks": 10,
+    "ticks": 500,
+    "brains": {},
+    "memory": "none"
+  },
+  "seeds": [
+    7
+  ],
+  "budgetUsd": 24
+}
