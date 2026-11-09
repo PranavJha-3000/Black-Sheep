@@ -215,6 +215,13 @@ describe('experiment payloads', () => {
     expect(buildExperimentDetail({ ...row, status: 'queued', resultJson: null }).result).toBeNull();
   });
 
+  it('the detail leaves out per-run events (the replay serves them)', () => {
+    const runs = [{ label: 'rule', runs: [{ seed: 1, digest: 'd', liquidated: [], navs: { a: [1] }, events: [{ tick: 3, type: 'x' }], sources: {}, costUsd: 0 }] }];
+    const d = buildExperimentDetail({ ...row, resultJson: JSON.stringify({ arms: [], series: [], runs }) });
+    expect(d.result!.runs[0].runs[0].events).toBeUndefined();
+    expect(JSON.parse(JSON.stringify(d)).result.runs[0].runs[0]).toEqual({ seed: 1, digest: 'd', liquidated: [], navs: { a: [1] }, sources: {}, costUsd: 0 });
+  });
+
   it('corrupt stored JSON degrades to null instead of throwing', () => {
     const d = buildExperimentDetail({ ...row, resultJson: '{oops', specJson: 'nope' });
     expect(d.result).toBeNull();
@@ -239,6 +246,15 @@ describe('buildRunReplay', () => {
   it('returns null for an unknown arm or seed', () => {
     expect(buildRunReplay(row, 'nope', 1, [])).toBeNull();
     expect(buildRunReplay(row, 'rule', 9, [])).toBeNull();
+  });
+
+  it('returns null for a legacy run stored without navs or events, so the route 404s', () => {
+    const { navs: _n, ...noNavs } = run(1, 100);
+    const { events: _e, ...noEvents } = run(2, 200);
+    const legacy = { ...row, resultJson: JSON.stringify({ arms: [], series: [], runs: [{ label: 'rule', runs: [noNavs, noEvents] }] }) };
+    expect(buildRunReplay(legacy, 'rule', 1, [])).toBeNull();
+    expect(buildRunReplay(legacy, 'rule', 2, [])).toBeNull();
+    expect(buildRunReplay(row, 'rule', 1, [])?.events).toEqual([]);
   });
 
   it("returns the run's own navs, not the first seed's", () => {

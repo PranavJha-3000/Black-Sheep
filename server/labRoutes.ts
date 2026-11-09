@@ -4,7 +4,7 @@ import { prisma } from './db';
 import { wrap } from './auth';
 import { buildExperimentDetail, buildExperimentSummary, buildRunReplay, checkLabToken, decisionFromRow, dryRunExperiment, findRun, parseExperimentRequest } from './labCore';
 import { EXPERIMENT_REPLAY_MAX_DECISIONS } from '../config/game';
-import { buildLeaderboard } from './leaderboardCore';
+import { makeLeaderboardCache } from './leaderboardCore';
 import { parseFundId } from './observerCore';
 
 /**
@@ -28,12 +28,16 @@ labRouter.get(
   }),
 );
 
+const leaderboard = makeLeaderboardCache();
+
 labRouter.get(
   '/leaderboard',
   wrap(async (_req, res) => {
-    // Every finished brains experiment counts; no hand-picking.
-    const rows = await prisma.experiment.findMany({ where: { status: 'done', variable: 'brains' } });
-    res.json({ leaderboard: buildLeaderboard(rows) });
+    // Every finished brains experiment counts; no hand-picking. Public and polled, so the parse is cached.
+    const where = { status: 'done', variable: 'brains' };
+    const agg = await prisma.experiment.aggregate({ where, _count: { _all: true }, _max: { id: true } });
+    const board = await leaderboard(`${agg._count._all}/${agg._max.id ?? 0}`, () => prisma.experiment.findMany({ where }));
+    res.json({ leaderboard: board });
   }),
 );
 

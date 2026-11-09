@@ -24,7 +24,7 @@ function Leaderboard({ rows }: { rows: LeaderboardRow[] }) {
           <table className="data-table w-full text-[13px]">
             <thead>
               <tr>
-                {['Brain', 'n', 'Return (95% CI)', 'Survival', 'Paired vs policy', '$/decision'].map((h) => <th key={h}>{h}</th>)}
+                {['Brain', 'n', 'Return (95% CI)', 'Survival', 'Paired vs policy', 'Fallback', '$/decision'].map((h) => <th key={h}>{h}</th>)}
               </tr>
             </thead>
             <tbody>
@@ -32,7 +32,7 @@ function Leaderboard({ rows }: { rows: LeaderboardRow[] }) {
                 <tr key={r.brain} className={cx('border-t border-terminal-border', r.insufficient && 'opacity-50')}>
                   <td className="font-semibold">
                     {r.displayName}
-                    {r.insufficient && <span className="ml-2 rounded-full bg-white/[0.08] px-2 py-0.5 text-[10px] font-normal text-terminal-dim">n&lt;5</span>}
+                    {r.insufficient && <span className="ml-2 rounded-full bg-white/[0.08] px-2 py-0.5 text-[10px] font-normal text-terminal-dim">{r.brain === 'policy' ? 'n<5' : 'pairs<5'}</span>}
                   </td>
                   <td className="text-terminal-dim">{r.runs}</td>
                   <td className="min-w-[220px]">
@@ -52,6 +52,8 @@ function Leaderboard({ rows }: { rows: LeaderboardRow[] }) {
                       ? `${r.pairedVsPolicy.wins}/${r.pairedVsPolicy.pairs} wins · ${signed(r.pairedVsPolicy.meanDiff)}`
                       : '—'}
                   </td>
+                  {/* Share of model calls that fell back to policy; a high rate means the row measures the policy, not the model. */}
+                  <td className="text-terminal-dim">{r.fallbackRate === null ? '—' : `${(r.fallbackRate * 100).toFixed(0)}%`}</td>
                   <td className="text-terminal-dim">{r.meanCostPerDecision === null ? '—' : `$${r.meanCostPerDecision.toFixed(4)}`}</td>
                 </tr>
               ))}

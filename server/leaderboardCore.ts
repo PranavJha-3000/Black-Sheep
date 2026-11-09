@@ -15,7 +15,9 @@ export interface LeaderboardRow {
   survival: number;
   pairedVsPolicy: { wins: number; pairs: number; meanDiff: number; ci: [number, number] | null } | null;
   meanCostPerDecision: number | null;
-  /** Fewer than MIN_RUNS samples: listed, but not evidence. */
+  /** Share of model decisions that fell back to policy (fallback / (llm + fallback)); null for Policy or no model decisions. */
+  fallbackRate: number | null;
+  /** Fewer than MIN_RUNS paired samples (runs, for Policy): listed, but not evidence. */
   insufficient: boolean;
 }
 
@@ -29,6 +31,7 @@ interface Sample {
   survived: boolean;
   cost: number;
   decisions: number;
+  fallbacks: number;
   diff: number | null;
   key: string;
 }
@@ -71,8 +74,10 @@ export function buildLeaderboard(rows: ExperimentRow[]): LeaderboardRow[] {
           const brain = brainOf(arm.label, fund);
           if (brain === 'policy' && isBaseline(arm.label)) policyReturn.set(`${fund}|${run.seed}`, ret);
           const src = run.sources?.[fund];
+          // A model run with no model decision at all (bad key, outage) measured the policy, not the model.
+          if (brain !== 'policy' && !src?.llm) continue;
           // shortcut: run cost is attributed to the subject fund — exact while the form allows one model fund per arm; per-fund cost when multi-model arms exist
-          mine.push({ brain, exp: row.id, ret, survived: !(run.liquidated ?? []).includes(fund), cost: run.costUsd, decisions: src ? src.llm + src.fallback : 0, diff: null, key: `${fund}|${run.seed}` });
+          mine.push({ brain, exp: row.id, ret, survived: !(run.liquidated ?? []).includes(fund), cost: run.costUsd, decisions: src ? src.llm + src.fallback : 0, fallbacks: src?.fallback ?? 0, diff: null, key: `${fund}|${run.seed}` });
         }
       }
     }
@@ -102,7 +107,9 @@ export function buildLeaderboard(rows: ExperimentRow[]): LeaderboardRow[] {
           ? null
           : { wins: diffs.filter((d) => d > 0).length, pairs: diffs.length, meanDiff: mean(diffs), ci: bootstrapMeanCI(diffs) },
       meanCostPerDecision: brain === 'policy' || decisions === 0 ? null : ss.reduce((a, s) => a + s.cost, 0) / decisions,
-      insufficient: ss.length < MIN_RUNS,
+      fallbackRate: brain === 'policy' || decisions === 0 ? null : ss.reduce((a, s) => a + s.fallbacks, 0) / decisions,
+      // Model rows are ranked by the paired edge, so evidence is counted in pairs, not runs.
+      insufficient: (brain === 'policy' ? ss.length : diffs.length) < MIN_RUNS,
     });
   }
   // Paired edge over policy first (null last), then raw mean return.
@@ -112,4 +119,17 @@ export function buildLeaderboard(rows: ExperimentRow[]): LeaderboardRow[] {
     if (x !== y && (x === null || y === null)) return x === null ? 1 : -1;
     return (y ?? 0) - (x ?? 0) || (b.meanReturn ?? 0) - (a.meanReturn ?? 0);
   });
+}
+
+/**
+ * The board, rebuilt only when the done brains rows change. Done rows are immutable and only ever added,
+ * so their (count, max id) identifies the set; `key` comes from one cheap aggregate query.
+ * shortcut: a deleted-and-replaced done row with the same count and max id would serve a stale board; key on updatedAt if rows ever become deletable.
+ */
+export function makeLeaderboardCache() {
+  let cached: { key: string; board: LeaderboardRow[] } | null = null;
+  return async (key: string, load: () => Promise<ExperimentRow[]>): Promise<LeaderboardRow[]> => {
+    if (cached?.key !== key) cached = { key, board: buildLeaderboard(await load()) };
+    return cached.board;
+  };
 }

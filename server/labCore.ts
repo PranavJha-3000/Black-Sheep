@@ -202,7 +202,8 @@ export interface ExperimentResult {
       liquidated: string[];
       /** Fund key -> NAV series, downsampled to EXPERIMENT_SERIES_POINTS. */
       navs: Record<string, number[]>;
-      events: RunResult['events'];
+      /** Always stored; absent in pre-Task-4 results and stripped from the detail payload (replay serves it). */
+      events?: RunResult['events'];
       /** Fund key -> decision counts by source. */
       sources: Record<string, Record<DecisionSource, number>>;
       costUsd: number;
@@ -226,12 +227,13 @@ const hasModelBrains = (spec: ExperimentSpec) => expandArms(spec).some((a) => ar
 export async function runExperimentSpec(
   spec: ExperimentSpec,
   yieldFn: () => Promise<void>,
-  deps?: { create: CreateMessage | null; onDecision?: (arm: string, seed: number, r: DecisionRecord) => Promise<void> },
+  deps?: { create: CreateMessage | null; onDecision?: (arm: string, seed: number, r: DecisionRecord) => Promise<void>; budget?: ExperimentBudget },
 ): Promise<ExperimentResult> {
   const estimateUsd = estimateExperimentCostUsd(spec);
   const create = deps?.create ?? null;
   if (hasModelBrains(spec) && !create) throw new Error('Model brains need a provider key on the server.');
-  const budget: ExperimentBudget = { limitUsd: spec.budgetUsd ?? 0, spentUsd: 0 };
+  // A caller-owned budget lets the caller see the spend even when the run throws.
+  const budget: ExperimentBudget = deps?.budget ?? { limitUsd: spec.budgetUsd ?? 0, spentUsd: 0 };
   const onDecision = deps?.onDecision;
   // Fresh per run (the gate state is per world). Policy funds never reach `decide`, so a policy-only arm needs no provider.
   const decideFor = (): DecideFn => (create ? makeExperimentDecide(create, budget) : () => Promise.reject(new Error('Model brains need a provider key on the server.')));
@@ -332,11 +334,16 @@ export function buildExperimentSummary(row: ExperimentSummaryRow): ExperimentSum
 }
 
 export function buildExperimentDetail(row: ExperimentRow): ExperimentDetail {
+  const result = parseJson<ExperimentResult>(row.resultJson);
+  // Per-run events are most of a large blob and polled; the replay route serves them one run at a time.
+  if (Array.isArray(result?.runs)) {
+    result.runs = result.runs.map((a) => ({ ...a, runs: Array.isArray(a.runs) ? a.runs.map((r) => ({ ...r, events: undefined })) : a.runs }));
+  }
   return {
     ...buildExperimentSummary(row),
     spec: parseJson<ExperimentSpec>(row.specJson),
     manifest: parseJson<ExperimentManifest>(row.manifestJson),
-    result: parseJson<ExperimentResult>(row.resultJson),
+    result,
     error: row.error,
     startedAt: row.startedAt?.toISOString() ?? null,
   };
@@ -369,10 +376,11 @@ export function navTickAxis(ticks: number): number[] {
   return Array.from({ length: EXPERIMENT_SERIES_POINTS }, (_, i) => at(downsampleIndex(i, raw, EXPERIMENT_SERIES_POINTS)));
 }
 
-/** The run's stored series for arm/seed, or null when the experiment has no such run. */
+/** The run's stored series for arm/seed, or null when the experiment has no such run or it predates navs/events (not replayable). */
 export function findRun(row: ExperimentRow, arm: string, seed: number) {
   const result = parseJson<ExperimentResult>(row.resultJson);
-  return result?.runs?.find((a) => a.label === arm)?.runs.find((r) => r.seed === seed) ?? null;
+  const run = result?.runs?.find((a) => a.label === arm)?.runs?.find((r) => r.seed === seed);
+  return run && run.navs && Array.isArray(run.events) ? { ...run, events: run.events } : null;
 }
 
 /** One run of a finished experiment as the replay reads it; null for an unknown arm/seed or unfinished experiment. */

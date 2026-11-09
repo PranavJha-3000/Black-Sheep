@@ -1,6 +1,6 @@
 import { experimentManifest, type DecisionRecord } from '@black-sheep/engine/experiment';
 import { prisma } from './db';
-import { BudgetExhausted } from './labBrain';
+import type { ExperimentBudget } from './labBrain';
 import { parseExperimentRequest, runExperimentSpec } from './labCore';
 import { anthropicCreate, type CreateMessage } from './providers/anthropic';
 import { EXPERIMENT_POLL_MS } from '../config/game';
@@ -25,6 +25,7 @@ const yieldToEventLoop = () => new Promise<void>((resolve) => setImmediate(resol
  * a model-backed one would pay the provider twice, so it fails instead.
  */
 export async function requeueInterrupted(): Promise<void> {
+  // costUsd is deliberately not set: it already holds the spend persisted during the run.
   await prisma.experiment.updateMany({
     where: { status: 'running', hasModelBrains: true },
     data: { status: 'failed', error: 'interrupted by restart', finishedAt: new Date() },
@@ -67,6 +68,8 @@ export async function runNextExperiment(): Promise<boolean> {
       data: { status: 'running', startedAt: new Date() },
     });
     if (claimed.count === 0) return false;
+    // Owned here, not by runExperimentSpec, so a failure of any kind still knows what was spent.
+    const budget: ExperimentBudget = { limitUsd: 0, spentUsd: 0 };
     // One run's decisions, written in one createMany when the run changes or the experiment ends.
     let buffer: ReturnType<typeof decisionRow>[] = [];
     let bufferRun = '';
@@ -82,12 +85,16 @@ export async function runNextExperiment(): Promise<boolean> {
         bufferRun = run;
       }
       buffer.push(decisionRow(next.id, arm, seed, r));
+      // Spend is persisted after every paid call (decisions are still batched per run), so a crash or
+      // restart loses no recorded spend; requeueInterrupted leaves costUsd untouched.
+      if (r.source !== 'policy') await prisma.experiment.update({ where: { id: next.id }, data: { costUsd: budget.spentUsd } });
     };
     try {
       // Re-validated: the stored spec is data, and the limits may have changed since it was queued.
       const parsed = parseExperimentRequest(JSON.parse(next.specJson), { providerConfigured: createMessage !== null });
       if (!parsed.ok) throw new Error(parsed.error);
-      const result = await runExperimentSpec(parsed.spec, yieldToEventLoop, { create: createMessage, onDecision });
+      budget.limitUsd = parsed.spec.budgetUsd ?? 0;
+      const result = await runExperimentSpec(parsed.spec, yieldToEventLoop, { create: createMessage, onDecision, budget });
       await flush();
       await prisma.experiment.update({
         where: { id: next.id },
@@ -109,7 +116,8 @@ export async function runNextExperiment(): Promise<boolean> {
         data: {
           status: 'failed',
           error: err instanceof Error ? err.message : String(err),
-          ...(err instanceof BudgetExhausted ? { costUsd: err.spentUsd } : {}),
+          // Any failure, not only BudgetExhausted, records the spend actually incurred.
+          costUsd: budget.spentUsd,
           finishedAt: new Date(),
         },
       });

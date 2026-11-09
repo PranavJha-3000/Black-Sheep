@@ -29,7 +29,7 @@ export default function RunReplay() {
   const [i, setI] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [copied, setCopied] = useState(false);
-  const last = Math.max(0, (data?.navTicks.length ?? 1) - 1);
+  const last = Math.max(0, (data?.navTicks?.length ?? 1) - 1);
 
   // A new replay starts paused at the first point (never autoplays).
   useEffect(() => { setI(0); setPlaying(false); }, [data]);
@@ -41,7 +41,8 @@ export default function RunReplay() {
   useEffect(() => { if (playing && i >= last) setPlaying(false); }, [playing, i, last]);
 
   const chart = useMemo(() => {
-    if (!data || data.navTicks.length === 0) return null;
+    // Defensive: a payload from an older server may lack navs/events; it must render the empty state, not crash.
+    if (!data || !data.navs || !Array.isArray(data.navTicks) || data.navTicks.length === 0) return null;
     const all = Object.values(data.navs).flat();
     const min = Math.min(...all); const max = Math.max(...all);
     const end = data.navTicks[data.navTicks.length - 1] || 1;
@@ -55,11 +56,11 @@ export default function RunReplay() {
     return { x, min, max, lines, end };
   }, [data]);
 
-  const feed = useMemo(() => (data ? feedAt(data.decisions, data.navTicks, i) : []), [data, i]);
+  const feed = useMemo(() => (data && chart ? feedAt(data.decisions ?? [], data.navTicks, i) : []), [data, chart, i]);
   const digest = run && details[run.experimentId]?.result?.runs.find((a) => a.label === run.arm)?.runs.find((r) => r.seed === run.seed)?.digest;
 
   if (!run) return null;
-  const tick = data?.navTicks[i] ?? 0;
+  const tick = data?.navTicks?.[i] ?? 0;
   const copy = () => {
     void navigator.clipboard?.writeText(location.href).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); });
   };
@@ -86,7 +87,7 @@ export default function RunReplay() {
             <svg viewBox={`0 0 ${W} ${H}`} className="h-full w-full" preserveAspectRatio="none" role="img" aria-label={`NAV of every fund, cursor at tick ${tick}`}>
               {[0.25, 0.5, 0.75].map((f) => (<line key={f} x1={PAD} x2={W - PAD} y1={H * f} y2={H * f} stroke="rgb(255 255 255 / 0.05)" vectorEffect="non-scaling-stroke" />))}
               {/* Director interventions run the full height, dashed; scripted/random events are short ticks on the floor. */}
-              {data.events.map((e, n) => e.director ? (
+              {(data.events ?? []).map((e, n) => e.director ? (
                 <line key={n} x1={chart.x(e.tick)} x2={chart.x(e.tick)} y1={PAD} y2={H - PAD} stroke="rgb(var(--purple) / 0.6)" strokeDasharray="4 3" vectorEffect="non-scaling-stroke"><title>{`Director: ${e.type} at tick ${e.tick}`}</title></line>
               ) : (
                 <line key={n} x1={chart.x(e.tick)} x2={chart.x(e.tick)} y1={H - PAD - 14} y2={H - PAD} stroke="rgb(var(--dim) / 0.7)" vectorEffect="non-scaling-stroke"><title>{`${e.type} at tick ${e.tick}`}</title></line>

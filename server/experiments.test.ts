@@ -44,6 +44,7 @@ vi.mock('./db', () => ({
 }));
 
 import { requeueInterrupted, runNextExperiment } from './experiments';
+import { prisma } from './db';
 import { DECISION_MAX_TOKENS, DECISION_PROMPT_TOKENS_ESTIMATE, MAX_TOOL_ROUNDS } from '../config/game';
 import { estimateCallCostUsd } from './budget';
 
@@ -117,6 +118,34 @@ describe('experiment runner', () => {
     // Rerunning would pay the provider twice.
     expect(db.rows[0]).toMatchObject({ status: 'failed', error: 'interrupted by restart' });
     expect(db.rows[1].status).toBe('queued');
+  });
+
+  it('keeps the spend persisted before a restart', async () => {
+    db.rows = [{ id: 1, status: 'running', specJson: JSON.stringify(modelSpec(5)), hasModelBrains: true, costUsd: 0.37 }];
+    await requeueInterrupted();
+    expect(db.rows[0]).toMatchObject({ status: 'failed', costUsd: 0.37 });
+  });
+
+  it('persists spend after each paid call while still running', async () => {
+    vi.mocked(prisma.experiment.update).mockClear();
+    db.rows = [{ id: 1, status: 'queued', specJson: JSON.stringify(modelSpec(25)) }];
+    await runNextExperiment();
+    // Mid-run writes carry costUsd and no status; a restart after any paid call finds its spend on the row.
+    const mid = vi.mocked(prisma.experiment.update).mock.calls.map(([a]) => a.data as Record<string, unknown>).filter((d) => !('status' in d));
+    expect(mid.length).toBeGreaterThan(0);
+    expect(mid[0].costUsd).toBeGreaterThan(0);
+    expect(mid.at(-1)!.costUsd).toBeCloseTo(db.rows[0].costUsd!);
+  });
+
+  it('records spend when a model-backed experiment fails for a non-budget reason', async () => {
+    // Batch 1 is the policy arm; batch 2 (the paid model run) fails to write.
+    vi.mocked(prisma.experimentDecision.createMany)
+      .mockImplementationOnce((async () => ({ count: 1 })) as never)
+      .mockImplementationOnce((async () => { throw new Error('disk full'); }) as never);
+    db.rows = [{ id: 1, status: 'queued', specJson: JSON.stringify(modelSpec(25)) }];
+    await runNextExperiment();
+    expect(db.rows[0]).toMatchObject({ status: 'failed', error: 'disk full' });
+    expect(db.rows[0].costUsd).toBeGreaterThan(0);
   });
 
   it('writes decisions in batches per run', async () => {
