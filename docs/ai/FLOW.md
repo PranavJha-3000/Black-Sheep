@@ -80,6 +80,17 @@ Assumptions: one server process (one runner). Experiment worlds share nothing wi
 Side effects: CPU on the server process (policy runs ≈ 42 ms per 5000-tick run before D-038; the async path is slower, unmeasured); one `Experiment` row plus up to ticks × funds × arms × seeds `ExperimentDecision` rows; paid provider calls for model brains, only through the lab runner.
 Fragile: every field of `ExperimentDetail` is public.
 
+## Leaderboard, chronicle and replay (`/lab/leaderboard`, TIMELINE, D-041)
+Entry: `server/labRoutes.ts` → `buildLeaderboard` (`server/leaderboardCore.ts`); client `TimelineView.tsx` / `RunReplay.tsx`
+
+1. `GET /lab/leaderboard` (public): load every `done` experiment with variable `brains` (all rows, uncached) → `buildLeaderboard` → `{leaderboard: LeaderboardRow[]}`. Subject funds = funds whose brain is a model in some arm; each model result is paired by fund and seed with the same experiment's all-policy baseline arm only; `insufficient` when n < 5; run cost attributed to the subject fund; legacy or malformed rows skipped.
+2. TIMELINE: shows the leaderboard and the run cards of the newest `CHRONICLE_MAX_EXPERIMENTS` (10) done experiments; `chronicle.ts` builds the cards (legacy runs without navs skipped; brains looked up by arm label).
+3. Replay: a full page load on `#/timeline/<id>/<arm>/<seed>` routes to `RunReplay`, which fetches `GET /lab/experiments/:id/runs/:arm/:seed`. The x axis is the exact `navTicks` (raw nav point k at tick 3·(k+1)); the decision feed is synced to the cursor; play/pause steps one point per 150 ms; the footer shows the manifest hashes.
+
+Assumptions: one model fund per arm for exact cost attribution.
+Side effects: reads only.
+Fragile: every request loads all qualifying `resultJson` rows. No `hashchange` routing (changing the hash after load does nothing). Decisions after the last nav tick are hidden; decisions are capped at `EXPERIMENT_REPLAY_MAX_DECISIONS` = 2000. The digest shows '—' for experiments outside the newest chronicle set.
+
 ## Analytics (`GET /world/analytics`, D-028)
 Entry: `server/worldRoutes.ts` → `ensureLiveWorld()` → `buildAnalytics` in `server/analyticsCore.ts`
 

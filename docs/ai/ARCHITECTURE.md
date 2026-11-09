@@ -40,6 +40,7 @@
 - **World process:** one in-memory `World` — the persisted `World` row named `live` (market + scheduler + one `Agent` per registry fund). The loop mutates memory, persists snapshots/logs/decision deltas; a restart rebuilds from the latest snapshot (corrupt → throws) + Fund/Position rows + last RivalDecisionLog entry, keeping the persisted seed (D-018).
 - **World Director (D-029):** runs in the tick under the lock, sees only public conditions, can only fire validated catalog sector/macro events; every cycle is a `DirectorDecisionLog` row.
 - **Experiment worlds (D-032):** independent pure simulations run by `server/experiments.ts`; they share no state, lock or tables with the live world. Model-backed arms (D-038) call the provider through the injected `DecideFn`, outside any world lock, against one hard per-experiment budget (D-039); every decision is persisted to `ExperimentDecision` for replay and export.
+- **Leaderboard and replay (D-041):** derived on read from `Experiment.resultJson` and `ExperimentDecision`; no table of its own. `server/leaderboardCore.ts` is pure; the TIMELINE view and run replay are client views over the public `/lab/leaderboard` and `/lab/experiments/:id/runs/:arm/:seed` routes.
 - **Secrets:** `ANTHROPIC_API_KEY` and `JWT_SECRET` live in `.env`, read server-side only. Only the server calls the LLM provider (the Vite browser proxy was removed in Stage 1).
 
 ## Boundaries
