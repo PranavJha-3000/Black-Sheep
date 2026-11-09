@@ -40,12 +40,26 @@ describe('buildLeaderboard', () => {
   });
 
   it('pairs only within the same experiment and seed', () => {
-    // Exp 1 model seed 1 = +0.3 vs its own policy 0; exp 2 policy has a huge return that must not leak in.
-    const lb = buildLeaderboard([row(1, [0], [0.3]), row(2, [0.9], [0.9], {}, 10)]);
+    // Same seed in both experiments; exp 2's 0.9 policy return must not leak into exp 1's pair.
+    // Exp 3 has no baseline arm: its sample (same seed) must stay unpaired rather than borrow exp 1's partner.
+    const r3 = row(3, [0], [0.5]);
+    const spec3 = JSON.parse(r3.specJson);
+    spec3.values = [{ f: M }];
+    const noBaseline = { ...r3, specJson: JSON.stringify(spec3), resultJson: JSON.stringify({ runs: [JSON.parse(r3.resultJson!).runs[1]] }) };
+    const lb = buildLeaderboard([row(1, [0], [0.3]), row(2, [0.9], [0.9]), noBaseline]);
     const p = lb.find((r) => r.brain === M)!.pairedVsPolicy!;
     expect(p.pairs).toBe(2);
     expect(p.meanDiff).toBeCloseTo(0.15); // (0.3 + 0)/2
     expect(p.wins).toBe(1);
+    expect(lb.find((x) => x.brain === M)!.runs).toBe(3);
+  });
+
+  it('pairs only against the all-policy baseline arm', () => {
+    const r = row(1, [0], [0.3]);
+    const spec = JSON.parse(r.specJson);
+    spec.values = [{ f: M }]; // no baseline arm at all
+    const lb = buildLeaderboard([{ ...r, specJson: JSON.stringify(spec), resultJson: JSON.stringify({ runs: [JSON.parse(r.resultJson!).runs[1]] }) }]);
+    expect(lb.find((x) => x.brain === M)!.pairedVsPolicy).toBeNull();
   });
 
   it('marks rows under 5 runs insufficient', () => {

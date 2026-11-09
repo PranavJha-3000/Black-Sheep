@@ -50,9 +50,16 @@ export function buildLeaderboard(rows: ExperimentRow[]): LeaderboardRow[] {
     const result = parse<ExperimentResult>(row.resultJson);
     // Pre-per-run-navs results cannot be scored: skip, not an error.
     if (!spec || !result || !Array.isArray(result.runs) || result.runs.some((a) => a.runs.some((r) => !r.navs))) continue;
-    const arms = expandArms(spec);
+    let arms: ReturnType<typeof expandArms>;
+    try {
+      arms = expandArms(spec);
+    } catch {
+      continue; // malformed stored spec: skip the row, never 500 the public board
+    }
     const brainOf = (label: string, fund: string): FundBrain => arms.find((a) => a.label === label)?.config.brains?.[fund] ?? 'policy';
     const subjects = new Set(arms.flatMap((a) => Object.entries(a.config.brains ?? {}).filter(([, b]) => b !== 'policy').map(([f]) => f)));
+    // Partners come only from the all-policy baseline arm, so a mixed arm never overwrites them.
+    const isBaseline = (label: string) => Object.values(arms.find((a) => a.label === label)?.config.brains ?? {}).every((b) => b === 'policy');
     const policyReturn = new Map<string, number>();
     const mine: Sample[] = [];
     for (const arm of result.runs) {
@@ -62,10 +69,10 @@ export function buildLeaderboard(rows: ExperimentRow[]): LeaderboardRow[] {
           const ret = navs && seriesMetrics(navs, STARTING_CAPITAL).totalReturn;
           if (ret === null || ret === undefined || !Number.isFinite(ret)) continue;
           const brain = brainOf(arm.label, fund);
-          if (brain === 'policy') policyReturn.set(`${fund}|${run.seed}`, ret);
+          if (brain === 'policy' && isBaseline(arm.label)) policyReturn.set(`${fund}|${run.seed}`, ret);
           const src = run.sources?.[fund];
           // shortcut: run cost is attributed to the subject fund — exact while the form allows one model fund per arm; per-fund cost when multi-model arms exist
-          mine.push({ brain, exp: row.id, ret, survived: !run.liquidated.includes(fund), cost: run.costUsd, decisions: src ? src.llm + src.fallback : 0, diff: null, key: `${fund}|${run.seed}` });
+          mine.push({ brain, exp: row.id, ret, survived: !(run.liquidated ?? []).includes(fund), cost: run.costUsd, decisions: src ? src.llm + src.fallback : 0, diff: null, key: `${fund}|${run.seed}` });
         }
       }
     }
