@@ -10,6 +10,8 @@
 | `packages/engine/src/funds.ts`, `policies.ts` | Typed `FundProfile` view of the registry; per-personality deterministic fallback policies and `enforceRiskLimit` | config |
 | `packages/engine/src/metrics.ts`, `director.ts` | Pure evaluation metrics (series, concentration, events) and the World Director (public observation, rule policy, intervention validation, engine-built events) | config, engine types |
 | `packages/engine/src/experiment.ts` | Pure controlled experiment worlds: `simulateWorld` (the live tick's engine calls, synchronous, policy brains), one-variable arm expansion, manifest hashes, paired cross-seed comparison | engine, config |
+| `packages/engine/src/simMemory.ts` | Pure in-world memory for experiment worlds: `MemoryMode`, `updateSimMemory` (episodes and reflections into `SimFund.memory`, model-backed funds only, D-043) | engine memory, config |
+| `packages/engine/src/behaviour.ts` | Pure behavioural metrics per fund-run: `computeBehaviour` over the decision trail, gross series and shocks (D-044) | engine experiment types |
 | `packages/engine/src/stats.ts` | Pure experiment statistics: seeded percentile bootstrap CI of the mean, exact sign test, Holm correction (D-040) | engine market (PRNG) |
 | `server/db.ts` | PrismaClient singleton | @prisma/client |
 | `server/auth.ts` | Register/login (bcrypt, JWT), `requireAuth` middleware, `wrap()` async guard. Still mounted; the observer client no longer uses accounts | db |

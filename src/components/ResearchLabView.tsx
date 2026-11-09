@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { FUND_PROFILES } from '@black-sheep/engine/funds';
 import type { ExperimentVariable } from '@black-sheep/engine/experiment';
+import type { MemoryMode } from '@black-sheep/engine/simMemory';
 import { useGameStore } from '../store/gameStore';
 import type { ExperimentDetail } from '../../server/labCore';
 import { EXPERIMENT_MAX_BUDGET_USD, EXPERIMENT_MAX_SEEDS, EXPERIMENT_MAX_TICKS } from '../../config/game';
@@ -14,6 +15,18 @@ const fmtCI = (mean: number | null, ci: [number, number] | null) =>
   mean === null ? '—' : `${signed(mean, 1)}%${ci ? ` [${signed(ci[0], 1)}, ${signed(ci[1], 1)}]` : ''}`;
 const fmtP = (p: number | null | undefined) => (p == null ? '—' : p.toPrecision(3));
 const usd = (n: number) => `$${n.toFixed(2)}`;
+const MEMORY_MODES: MemoryMode[] = ['none', 'episodic', 'reflective', 'full'];
+/** Behaviour columns; the tooltips carry the definitions from D-044. */
+const BEHAVIOUR_COLUMNS = [
+  { key: 'actionEntropy', label: 'Entropy', tip: 'Shannon entropy of the counts of buy, short, close and hold over all decisions, divided by log2(4). 0 = one action only, 1 = uniform.' },
+  { key: 'riskCompliance', label: 'Risk compliance', tip: 'Share of non-hold proposals the risk limit left unchanged. Refused proposals (turned into hold) count as non-compliant.' },
+  { key: 'repeatedErrorRate', label: 'Repeated errors', tip: 'Of the closes at a loss on a ticker, the share followed by a new open on that ticker in the same direction within 50 ticks.' },
+  { key: 'shockDeRisk', label: 'Shock de-risk', tip: 'Mean drop in gross exposure (percentage points of NAV) 30 ticks after each shock (price impact of 5% or more). Positive = cut exposure.' },
+  { key: 'tradeRate', label: 'Trade rate', tip: 'Trades divided by decisions.' },
+] as const;
+/** `mean [lo, hi]`; missing or null stats (old experiments) render as an em dash. */
+const fmtStat = (s: { mean: number | null; ci: [number, number] | null } | null | undefined) =>
+  !s || s.mean === null ? '—' : `${fmtNum(s.mean, 2)}${s.ci ? ` [${fmtNum(s.ci[0], 2)}, ${fmtNum(s.ci[1], 2)}]` : ''}`;
 const BRAIN_OPTIONS: { value: string; label: string }[] = [
   { value: 'policy', label: 'Policy' },
   ...Object.entries(MODEL_REGISTRY).map(([id, m]) => ({ value: id, label: m.displayName })),
@@ -214,6 +227,35 @@ function ExperimentResultView({ d }: { d: ExperimentDetail }) {
             </div>
           </Section>
 
+          <Section title="BEHAVIOUR">
+            <div className="overflow-x-auto">
+              <table className="data-table w-full text-[13px]">
+                <thead>
+                  <tr>
+                    <th>Arm</th>
+                    <th>Fund</th>
+                    {BEHAVIOUR_COLUMNS.map((c) => (
+                      <th key={c.key} title={c.tip}>{c.label} mean [95% CI]</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {r.arms.flatMap((arm) =>
+                    arm.funds.map((f, fi) => (
+                      <tr key={`${arm.label}-${f.key}`} className={cx(fi === 0 && 'border-t border-terminal-border')}>
+                        <td className="text-terminal-dim">{fi === 0 ? arm.label : ''}</td>
+                        <td className="font-semibold">{f.name}</td>
+                        {BEHAVIOUR_COLUMNS.map((c) => (
+                          <td key={c.key}>{fmtStat(f.behaviour?.[c.key])}</td>
+                        ))}
+                      </tr>
+                    )),
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </Section>
+
           <Section title="NAV — FIRST SEED">
             <div className="grid gap-6 md:grid-cols-2">
               {r.series.map((arm) => (
@@ -270,6 +312,7 @@ const VARIABLES: { value: ExperimentVariable; label: string }[] = [
   { value: 'funds', label: 'Fund roster (each fund alone vs all)' },
   { value: 'decisionEveryTicks', label: 'Decision cadence (ticks)' },
   { value: 'brains', label: 'Brain (one fund: policy vs models)' },
+  { value: 'memory', label: 'Memory (none / episodic / reflective / full)' },
 ];
 
 function CreateExperiment({ onDone }: { onDone: () => void }) {
@@ -286,6 +329,9 @@ function CreateExperiment({ onDone }: { onDone: () => void }) {
   const [token, setToken] = useState('');
   const [baseBrains, setBaseBrains] = useState<Record<string, string>>({});
   const [budget, setBudget] = useState(5);
+  const [memory, setMemory] = useState<MemoryMode>('none');
+  // For variable = memory: which modes become arms (one arm each).
+  const [armMemory, setArmMemory] = useState<MemoryMode[]>(['none', 'full']);
   // For variable = brains: the fund under test and which brains become arms (one arm per brain).
   const [subject, setSubject] = useState(FUND_PROFILES[0]!.key);
   const [armBrains, setArmBrains] = useState<string[]>(['policy', 'claude-haiku-5-5']);
@@ -298,6 +344,7 @@ function CreateExperiment({ onDone }: { onDone: () => void }) {
     // Each fund alone, then the whole roster: a "mixed world" against single-fund worlds.
     if (variable === 'funds') return [...funds.map((k) => [k]), funds];
     if (variable === 'brains') return armBrains.map((b) => ({ [subject]: b }));
+    if (variable === 'memory') return armMemory;
     return cadenceValues
       .split(',')
       .map((v) => v.trim())
@@ -312,7 +359,7 @@ function CreateExperiment({ onDone }: { onDone: () => void }) {
     name,
     variable,
     values: values(),
-    base: { funds, directorMode, decisionEveryTicks: null, ticks, brains: baseModels },
+    base: { funds, directorMode, decisionEveryTicks: null, ticks, brains: baseModels, memory },
     seeds: Array.from({ length: seedCount }, (_, i) => firstSeed + i),
     ...(usesModel ? { budgetUsd: budget } : {}),
   });
@@ -400,6 +447,28 @@ function CreateExperiment({ onDone }: { onDone: () => void }) {
               </fieldset>
             </div>
           )}
+          {variable !== 'memory' && (
+            <label className="block space-y-1">
+              <span className="text-terminal-dim">Memory (base)</span>
+              <select className={input} value={memory} onChange={(e) => setMemory(e.target.value as MemoryMode)}>
+                {MEMORY_MODES.map((m) => (
+                  <option key={m} value={m}>{m}</option>
+                ))}
+              </select>
+            </label>
+          )}
+          {variable === 'memory' && (
+            <fieldset className="space-y-1">
+              <legend className="text-terminal-dim">Memory modes (one arm each)</legend>
+              {MEMORY_MODES.map((m) => (
+                <label key={m} className="flex items-center gap-2">
+                  <input type="checkbox" checked={armMemory.includes(m)} onChange={(e) => setArmMemory((ms) => MEMORY_MODES.filter((x) => (x === m ? e.target.checked : ms.includes(x))))} />
+                  {m}
+                </label>
+              ))}
+            </fieldset>
+          )}
+          {!usesModel && (memory !== 'none' || variable === 'memory') && <div className="text-terminal-dim">Memory only affects model brains.</div>}
           {variable === 'decisionEveryTicks' && (
             <label className="block space-y-1">
               <span className="text-terminal-dim">Cadence values (comma-separated; "registry" = each fund's own)</span>

@@ -80,6 +80,13 @@ Assumptions: one server process (one runner). Experiment worlds share nothing wi
 Side effects: CPU on the server process (policy runs ≈ 42 ms per 5000-tick run before D-038; the async path ≈ 113 ms per 5000-tick 3-fund run, final review measurement); one `Experiment` row plus up to ticks × funds × arms × seeds `ExperimentDecision` rows; paid provider calls for model brains, only through the lab runner.
 Fragile: every field of `ExperimentDetail` is public.
 
+## Experiment memory and behaviour (D-043, D-044)
+Entry: `packages/engine/src/experiment.ts`, async loop.
+1. Per tick: each fund proposes (policy or model brain, the model seeing `f.memory`), `enforceRiskLimit` produces the applied decision, `clamped = !sameDecision(proposed, enforced)`, and `applyDecisions` records a `TrailStep`.
+2. After decisions are applied, `updateSimMemory(funds, decided, tick, arm.memory ?? 'none', markNav)` writes episodes and reflections into `SimFund.memory` for model-backed funds only. Mode `none` returns immediately; policy funds are skipped.
+3. Wherever `navs` is pushed, `grossPct` is sampled too. `summarize` calls `computeBehaviour(trail, gross, shocks, trades)` and drops the gross series.
+4. `GET /lab/experiments/:id` returns `arms: compareArms(...)` computed at read time, so each fund's `behaviour` (mean + bootstrap CI over seeds, nulls skipped) is present for new experiments and missing for old ones (the UI shows an em dash).
+
 ## Leaderboard, chronicle and replay (`/lab/leaderboard`, TIMELINE, D-041)
 Entry: `server/labRoutes.ts` → `buildLeaderboard` (`server/leaderboardCore.ts`); client `TimelineView.tsx` / `RunReplay.tsx`
 

@@ -2,7 +2,7 @@
 
 ## Current state
 - Working: **Stage 9 Phase 2 built on the same branch** (D-041, FEATURE-014): public leaderboard (`GET /lab/leaderboard`, paired vs the all-policy baseline, `insufficient` below 5 pairs, fallback rate shown, cached; D-042), TIMELINE chronicle view and shareable run replay. **Stage 9 Phase 1 (research-grade lab) built on branch `feat/stage9-research-lab`, unmerged** (D-038..D-040, FEATURE-013): experiments can give a fund a model brain (`brains` variable) under a hard per-experiment budget, every decision is stored and replayable via `GET /lab/experiments/:id/runs/:arm/:seed`, and results carry bootstrap CIs, paired Δ vs baseline and Holm-corrected p. Live-model behaviour and real $/decision are UNVERIFIED (keyed smoke run is the user's step). Before that, **Stage 8 Research Lab foundation complete** (branch `feat/stage8-research-lab`): controlled, policy-only experiment worlds that vary one variable across arms on paired seeds, with a reproducibility manifest, a runner beside the live world, `/lab` routes (create needs `LAB_ADMIN_TOKEN`) and a RESEARCH LAB view (D-032, D-033). The rule Director was recalibrated — it had never fired. Stage 7 (merged): Pure evaluation metrics, per-fund NAV snapshots, `GET /world/analytics` and an ANALYTICS view (D-028); a World Director in the tick loop with `none`/`rule`/`jev` modes (default `rule`, env `DIRECTOR_MODE`) that can only fire validated sector/macro catalog events; the Jev adapter is a disabled stub (D-029). The observer has WORLD, FUNDS, FUND DETAIL, ACTIVITY and ANALYTICS views (D-027). Stages 1–7 are merged to `main`; APEX CAPITAL is retired (D-030).
-- In progress: nothing.
+- In progress: Stage 10 research study, Phase 3 (memory variable and behaviour metrics, D-043, D-044, FEATURE-015) built on `feat/stage10-research-study`. **Gate G5 (keyed smoke run) is still NOT VERIFIED.**
 - Demo-ready (2026-11-03): `npm run db:local` gives a real Postgres without Docker (D-036). Verified on it: all 5 migrations apply with no schema drift; server boots, the world ticks unattended, funds trade on policies, a lab experiment ran to `done`, and WORLD/FUNDS/FUND DETAIL/ACTIVITY/RESEARCH LAB/ANALYTICS render real data with no console errors. README has the run steps and the API table.
 - Broken: nothing known — typecheck, tests, lint and build green. Live-provider behaviour UNVERIFIED (no key used).
 - Avoid: Do not duplicate engine logic — import `@black-sheep/engine/*`. Every async Express route goes through `wrap()`. Prisma pinned to v6. Never call an LLM from the browser (VISION §14.9). Every field added to `buildWorldStatePayload` is public. Run ONE server process per DB. A fund's identity is its registry `name` — renaming an entry starts a new fund.
@@ -31,6 +31,12 @@
 - [ ] Docker Desktop on the user's machine fails to start its engine (WSL bootstrap error in its log); `npm run db:local` works around it. `scripts/verify-backend.ps1` still needs Docker (now uses `migrate deploy`).
 
 ## Log
+
+### 2026-11-10 · Claude Opus 5.5 (Claude Code) · Stage 10 Phase 3: memory variable and behaviour metrics in the Lab UI
+CHANGED: `src/components/ResearchLabView.tsx` gains a Memory base select, a `memory` variable with four-mode checkboxes, the hint "Memory only affects model brains." and a BEHAVIOUR table per arm (five metrics as `mean [lo, hi]`, tooltips carry the D-044 definitions, em dash when missing). Docs: D-043, D-044, FEATURE-015, FLOW, ARCHITECTURE.
+WHY: surface the engine memory variable and behaviour metrics in the Lab.
+VERIFY: see FEATURE-015.
+NOT VERIFIED: Gate G5 (keyed smoke run); the UI in a browser (controller step); live model behaviour with memory.
 
 ### 2026-11-09 · Claude Opus 5.5 (Claude Code) · Stage 9 final-review fixes I1–I4
 CHANGED: `server/experiments.ts` owns the experiment budget, persists `Experiment.costUsd` after every paid call and on any failure; `runExperimentSpec` accepts a caller budget; experiment detail drops per-run `events`; `/lab/leaderboard` cached on (count, max id); `findRun` 404s legacy runs without navs/events and `RunReplay.tsx` guards missing arrays; leaderboard rows gain `fallbackRate` (TIMELINE column), drop model runs with zero `llm` decisions, and flag `insufficient` below 5 pairs. Stale doc notes fixed (clamp test exists; leaderboard reads only `resultJson`; async run ≈ 113 ms).
