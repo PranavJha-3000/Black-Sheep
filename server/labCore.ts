@@ -21,7 +21,9 @@ import {
   type ExperimentVariable,
   type RunResult,
 } from '@black-sheep/engine/experiment';
+import type { Behaviour } from '@black-sheep/engine/behaviour';
 import { FUND_PROFILES, getFundProfile } from '@black-sheep/engine/funds';
+import { seriesMetrics } from '@black-sheep/engine/metrics';
 import { MODEL_REGISTRY } from '../config/models';
 import {
   EXPERIMENT_MAX_ARMS,
@@ -31,6 +33,7 @@ import {
   EXPERIMENT_REPLAY_MAX_DECISIONS,
   EXPERIMENT_SERIES_POINTS,
   SNAPSHOT_EVERY_TICKS,
+  STARTING_CAPITAL,
 } from '../config/game';
 import { estimateExperimentCostUsd, makeExperimentDecide, type ExperimentBudget } from './labBrain';
 import type { CreateMessage } from './providers/anthropic';
@@ -221,6 +224,10 @@ export interface ExperimentResult {
       /** Fund key -> decision counts by source. */
       sources: Record<string, Record<DecisionSource, number>>;
       costUsd: number;
+      /** Fund key -> behavioural metrics; absent in results stored before this field. */
+      behaviour?: Record<string, Behaviour>;
+      /** Fund key -> metrics on the full-resolution NAV series (navs above are downsampled); absent in older results. */
+      metrics?: Record<string, { totalReturnPct: number; maxDrawdownPct: number; sharpe: number | null }>;
     }[];
   }[];
   /** Model spend actually incurred across every run; 0 for policy-only experiments. */
@@ -280,6 +287,8 @@ export async function runExperimentSpec(
         events: r.events,
         sources: Object.fromEntries(r.funds.map((f) => [f.key, f.sources])),
         costUsd: r.costUsd,
+        behaviour: Object.fromEntries(r.funds.flatMap((f) => (f.behaviour ? [[f.key, f.behaviour]] : []))),
+        metrics: Object.fromEntries(r.funds.flatMap((f) => { const m = seriesMetrics(f.navs, STARTING_CAPITAL); return m.totalReturn === null ? [] : [[f.key, { totalReturnPct: m.totalReturn * 100, maxDrawdownPct: m.maxDrawdown * 100, sharpe: m.sharpe }]]; })),
       })),
     })),
     costUsd: budget.spentUsd,

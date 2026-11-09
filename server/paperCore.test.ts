@@ -42,6 +42,15 @@ describe('studyRows', () => {
     expect(m.behaviour.tradeRate).toBeNull();
     expect(m.configHash).toMatch(/^[0-9a-f]{8}$/);
   });
+  it('prefers stored full-resolution metrics and behaviour over the downsampled navs', () => {
+    const e = exp(1, 'study:H1:a', [0], [0.1]);
+    const res = JSON.parse(e.resultJson);
+    const beh = { actionEntropy: 0.5, riskCompliance: 1, repeatedErrorRate: 0, shockDeRisk: null, tradeRate: 0.2 };
+    res.runs[0].runs[0].metrics = { f: { totalReturnPct: 42, maxDrawdownPct: 7, sharpe: 1.5 } };
+    res.runs[0].runs[0].behaviour = { f: beh };
+    const [r] = studyRows([{ ...e, resultJson: JSON.stringify(res) }]);
+    expect(r).toMatchObject({ totalReturnPct: 42, maxDrawdownPct: 7, sharpe: 1.5, behaviour: beh });
+  });
 });
 
 describe('pairedContrasts', () => {

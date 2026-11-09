@@ -66,12 +66,14 @@ export function studyRows(experiments: { id: number; name: string; resultJson: u
         // A hypothesis with no model funds (policy-only test experiment): every fund is a subject so contrasts still work.
         const subjects = modelFunds.size > 0 ? [...modelFunds] : Object.keys(run.navs);
         for (const fund of subjects) {
-          const m = run.navs[fund] && seriesMetrics(run.navs[fund], STARTING_CAPITAL);
-          if (!m || m.totalReturn === null || !Number.isFinite(m.totalReturn)) continue;
+          // Prefer full-resolution stored metrics; the downsampled navs only serve older rows.
+          const sm = run.metrics?.[fund];
+          const nm = run.navs[fund] && seriesMetrics(run.navs[fund], STARTING_CAPITAL);
+          const met = sm ?? (nm && nm.totalReturn !== null ? { totalReturnPct: nm.totalReturn * 100, maxDrawdownPct: nm.maxDrawdown * 100, sharpe: nm.sharpe } : null);
+          if (!met || !Number.isFinite(met.totalReturnPct)) continue;
           const src = run.sources?.[fund];
           const model = src ? src.llm + src.fallback : 0;
-          // Old rows lack behaviour (and it is not yet stored per run): all nulls.
-          const behaviour = (run as { behaviour?: Record<string, Behaviour> }).behaviour?.[fund] ?? NULL_BEHAVIOUR;
+          const behaviour = run.behaviour?.[fund] ?? NULL_BEHAVIOUR;
           out.push({
             hypothesis,
             experimentId: e.id,
@@ -79,9 +81,9 @@ export function studyRows(experiments: { id: number; name: string; resultJson: u
             arm: arm.label,
             fundKey: fund,
             seed: run.seed,
-            totalReturnPct: m.totalReturn * 100,
-            maxDrawdownPct: m.maxDrawdown * 100,
-            sharpe: m.sharpe,
+            totalReturnPct: met.totalReturnPct,
+            maxDrawdownPct: met.maxDrawdownPct,
+            sharpe: met.sharpe,
             survived: !(run.liquidated ?? []).includes(fund),
             fallbackRate: model > 0 ? src!.fallback / model : null,
             // shortcut: run cost goes to the subject fund, exact with one model fund per arm (as the leaderboard)
