@@ -2,7 +2,8 @@ import { Router } from 'express';
 import { experimentManifest } from '@black-sheep/engine/experiment';
 import { prisma } from './db';
 import { wrap } from './auth';
-import { buildExperimentDetail, buildExperimentSummary, checkLabToken, parseExperimentRequest } from './labCore';
+import { buildExperimentDetail, buildExperimentSummary, buildRunReplay, checkLabToken, decisionFromRow, parseExperimentRequest } from './labCore';
+import { EXPERIMENT_REPLAY_MAX_DECISIONS } from '../config/game';
 import { parseFundId } from './observerCore';
 
 /**
@@ -36,6 +37,33 @@ labRouter.get(
       return;
     }
     res.json(buildExperimentDetail(row));
+  }),
+);
+
+labRouter.get(
+  '/experiments/:id/runs/:arm/:seed',
+  wrap(async (req, res) => {
+    const id = parseFundId(req.params.id);
+    const seed = Number(req.params.seed);
+    const row = id === null || !Number.isInteger(seed) ? null : await prisma.experiment.findUnique({ where: { id } });
+    if (!row || row.status !== 'done') {
+      res.status(404).json({ error: row ? 'experiment has no finished runs yet' : 'experiment not found' });
+      return;
+    }
+    // Express already URL-decodes params, so the arm label (e.g. `brains=...`) arrives as stored.
+    const arm = req.params.arm;
+    // One extra row detects truncation without a count query.
+    const rows = await prisma.experimentDecision.findMany({
+      where: { experimentId: row.id, arm, seed },
+      orderBy: [{ tick: 'asc' }, { id: 'asc' }],
+      take: EXPERIMENT_REPLAY_MAX_DECISIONS + 1,
+    });
+    const replay = buildRunReplay(row, arm, seed, rows.map(decisionFromRow));
+    if (!replay) {
+      res.status(404).json({ error: 'run not found' });
+      return;
+    }
+    res.json(replay);
   }),
 );
 

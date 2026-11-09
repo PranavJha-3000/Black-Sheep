@@ -26,7 +26,9 @@ import {
   EXPERIMENT_MAX_BUDGET_USD,
   EXPERIMENT_MAX_SEEDS,
   EXPERIMENT_MAX_TICKS,
+  EXPERIMENT_REPLAY_MAX_DECISIONS,
   EXPERIMENT_SERIES_POINTS,
+  SNAPSHOT_EVERY_TICKS,
 } from '../config/game';
 import { estimateExperimentCostUsd, makeExperimentDecide, type ExperimentBudget } from './labBrain';
 import type { CreateMessage } from './providers/anthropic';
@@ -327,5 +329,69 @@ export function buildExperimentDetail(row: ExperimentRow): ExperimentDetail {
     result: parseJson<ExperimentResult>(row.resultJson),
     error: row.error,
     startedAt: row.startedAt?.toISOString() ?? null,
+  };
+}
+
+export interface RunReplay {
+  experimentId: number;
+  arm: string;
+  seed: number;
+  /** Fund key -> NAV series (downsampled), one point every `snapshotEveryTicks` ticks. */
+  navs: Record<string, number[]>;
+  /** Effective tick spacing of the stored points: SNAPSHOT_EVERY_TICKS, stretched when the series was downsampled. */
+  snapshotEveryTicks: number;
+  events: RunResult['events'];
+  decisions: DecisionRecord[];
+  /** More decisions exist than EXPERIMENT_REPLAY_MAX_DECISIONS; the tail is cut. */
+  truncated: boolean;
+  manifest: ExperimentManifest;
+}
+
+/** One run of a finished experiment as the replay reads it; null for an unknown arm/seed or unfinished experiment. */
+export function buildRunReplay(row: ExperimentRow, arm: string, seed: number, decisions: DecisionRecord[]): RunReplay | null {
+  const result = parseJson<ExperimentResult>(row.resultJson);
+  const manifest = parseJson<ExperimentManifest>(row.manifestJson);
+  const run = result?.runs?.find((a) => a.label === arm)?.runs.find((r) => r.seed === seed);
+  if (!run || !manifest) return null;
+  const points = Math.max(0, ...Object.values(run.navs).map((n) => n.length));
+  const ticks = parseJson<ExperimentSpec>(row.specJson)?.base.ticks ?? 0;
+  return {
+    experimentId: row.id,
+    arm,
+    seed,
+    navs: run.navs,
+    snapshotEveryTicks: points < EXPERIMENT_SERIES_POINTS || ticks === 0 ? SNAPSHOT_EVERY_TICKS : ticks / (points - 1),
+    events: run.events,
+    decisions: decisions.slice(0, EXPERIMENT_REPLAY_MAX_DECISIONS),
+    truncated: decisions.length > EXPERIMENT_REPLAY_MAX_DECISIONS,
+    manifest,
+  };
+}
+
+/** A stored ExperimentDecision row back into the engine's DecisionRecord. */
+export function decisionFromRow(r: {
+  tick: number; fundKey: string; source: string; model: string | null; action: string; ticker: string | null;
+  dollarAmount: number | null; confidence: number | null; reasoning: string; costUsd: number; inputTokens: number;
+  outputTokens: number; latencyMs: number; toolCallsJson: string; outcome: string | null;
+}): DecisionRecord {
+  const calls = parseJson<{ name: string; ok: boolean }[]>(r.toolCallsJson);
+  return {
+    tick: r.tick,
+    fundKey: r.fundKey,
+    source: r.source as DecisionSource,
+    model: r.model,
+    decision: {
+      action: r.action,
+      ...(r.ticker !== null && { ticker: r.ticker }),
+      ...(r.dollarAmount !== null && { dollarAmount: r.dollarAmount }),
+      reasoning: r.reasoning,
+      confidence: r.confidence ?? 0,
+    } as DecisionRecord['decision'],
+    costUsd: r.costUsd,
+    inputTokens: r.inputTokens,
+    outputTokens: r.outputTokens,
+    latencyMs: r.latencyMs,
+    toolCalls: Array.isArray(calls) ? calls : [],
+    outcome: r.outcome,
   };
 }

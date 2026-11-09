@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
-import { buildExperimentDetail, buildExperimentSummary, checkLabToken, parseExperimentRequest, runExperimentSpec, type ExperimentRow } from './labCore';
+import { buildExperimentDetail, buildExperimentSummary, buildRunReplay, checkLabToken, decisionFromRow, parseExperimentRequest, runExperimentSpec, type ExperimentRow } from './labCore';
 import { BudgetExhausted } from './labBrain';
 import { estimateCallCostUsd } from './budget';
 import type { CreateMessage } from './providers/anthropic';
-import { DECISION_MAX_TOKENS, DECISION_PROMPT_TOKENS_ESTIMATE, MAX_TOOL_ROUNDS } from '../config/game';
+import { EXPERIMENT_REPLAY_MAX_DECISIONS, DECISION_MAX_TOKENS, DECISION_PROMPT_TOKENS_ESTIMATE, MAX_TOOL_ROUNDS } from '../config/game';
 
 const ALL = ['sterling-vale', 'halden-whitmore', 'crown-meridian'];
 const KEYED = { providerConfigured: true };
@@ -218,5 +218,41 @@ describe('experiment payloads', () => {
     expect(d.result).toBeNull();
     expect(d.spec).toBeNull();
     expect(buildExperimentSummary({ ...row, specJson: 'nope' })).toMatchObject({ arms: 0, seeds: 0 });
+  });
+});
+
+describe('buildRunReplay', () => {
+  const run = (seed: number, nav: number) => ({ seed, digest: 'd', liquidated: [], navs: { a: [nav, nav + 1] }, events: [], sources: {}, costUsd: 0 });
+  const row: ExperimentRow = {
+    id: 3, createdAt: new Date(), name: 'x', status: 'done', variable: 'directorMode', specJson: JSON.stringify(body()),
+    manifestJson: JSON.stringify({ configHash: 'h', policyOnly: true }),
+    resultJson: JSON.stringify({ arms: [], series: [], runs: [{ label: 'rule', runs: [run(1, 100), run(2, 200)] }] }),
+    error: null, startedAt: null, finishedAt: null,
+  };
+  const rec = (tick: number) => decisionFromRow({
+    tick, fundKey: 'a', source: 'policy', model: null, action: 'hold', ticker: null, dollarAmount: null, confidence: null,
+    reasoning: 'r', costUsd: 0, inputTokens: 0, outputTokens: 0, latencyMs: 0, toolCallsJson: 'bad json', outcome: null,
+  });
+
+  it('returns null for an unknown arm or seed', () => {
+    expect(buildRunReplay(row, 'nope', 1, [])).toBeNull();
+    expect(buildRunReplay(row, 'rule', 9, [])).toBeNull();
+  });
+
+  it("returns the run's own navs, not the first seed's", () => {
+    expect(buildRunReplay(row, 'rule', 2, [])?.navs).toEqual({ a: [200, 201] });
+  });
+
+  it('caps decisions and flags truncation', () => {
+    const many = Array.from({ length: EXPERIMENT_REPLAY_MAX_DECISIONS + 1 }, (_, i) => rec(i));
+    const r = buildRunReplay(row, 'rule', 1, many)!;
+    expect(r.decisions).toHaveLength(EXPERIMENT_REPLAY_MAX_DECISIONS);
+    expect(r.truncated).toBe(true);
+    expect(buildRunReplay(row, 'rule', 1, many.slice(0, 5))?.truncated).toBe(false);
+  });
+
+  it('maps a stored row, tolerating bad toolCallsJson', () => {
+    expect(rec(4).toolCalls).toEqual([]);
+    expect(rec(4).decision).toEqual({ action: 'hold', reasoning: 'r', confidence: 0 });
   });
 });

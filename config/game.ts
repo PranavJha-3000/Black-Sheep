@@ -174,6 +174,8 @@ export const EXPERIMENT_MAX_ARMS = 6;
 export const EXPERIMENT_MAX_BUDGET_USD = 25;
 /** NAV points kept per fund per arm for charts (the first seed's run). */
 export const EXPERIMENT_SERIES_POINTS = 200;
+/** Most decisions one run replay returns; beyond it the payload says `truncated`. */
+export const EXPERIMENT_REPLAY_MAX_DECISIONS = 2000;
 /** How often the runner looks for a queued experiment. */
 export const EXPERIMENT_POLL_MS = 2_000;
 /** RESEARCH LAB list/detail refetch interval while the view is open. */
