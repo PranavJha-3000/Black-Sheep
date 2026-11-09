@@ -4,6 +4,7 @@ import { prisma } from './db';
 import { wrap } from './auth';
 import { buildExperimentDetail, buildExperimentSummary, buildRunReplay, checkLabToken, decisionFromRow, dryRunExperiment, findRun, parseExperimentRequest } from './labCore';
 import { EXPERIMENT_REPLAY_MAX_DECISIONS } from '../config/game';
+import { buildLeaderboard } from './leaderboardCore';
 import { parseFundId } from './observerCore';
 
 /**
@@ -24,6 +25,15 @@ labRouter.get(
       select: { id: true, createdAt: true, name: true, status: true, variable: true, specJson: true, finishedAt: true },
     });
     res.json({ experiments: rows.map(buildExperimentSummary) });
+  }),
+);
+
+labRouter.get(
+  '/leaderboard',
+  wrap(async (_req, res) => {
+    // Every finished brains experiment counts; no hand-picking.
+    const rows = await prisma.experiment.findMany({ where: { status: 'done', variable: 'brains' } });
+    res.json({ leaderboard: buildLeaderboard(rows) });
   }),
 );
 
