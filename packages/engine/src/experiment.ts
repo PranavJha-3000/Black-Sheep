@@ -389,7 +389,7 @@ function summarize(s: SimState, costUsd: number): RunResult {
     decisions: f.decisions,
     trades: f.trades,
     sources: f.sources,
-    behaviour: { ...computeBehaviour(f.trail, f.gross, shocks), tradeRate: f.decisions ? f.trades / f.decisions : null },
+    behaviour: computeBehaviour(f.trail, f.gross, shocks, f.trades),
   }));
   const prices = Object.fromEntries(Object.values(s.market.companies).map((c) => [c.ticker, c.price]));
   return {

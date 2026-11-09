@@ -24,16 +24,16 @@ const ACTIONS: TrailStep['action'][] = ['buy', 'short', 'close', 'hold'];
 
 /**
  * One value per metric per fund per run; null when the metric has no basis.
- * Note `tradeRate` here is the non-hold share of decisions; `summarize` replaces it
- * with the exact filled-trades / decisions, which the trail cannot see.
+ * `trades` is the count of fills (position changes), which the trail cannot show;
+ * tradeRate = trades / decisions.
  */
 export function computeBehaviour(
   trail: TrailStep[],
   gross: { tick: number; grossPct: number }[],
   shocks: number[],
+  trades: number,
 ): Behaviour {
   const n = trail.length;
-  const nonHold = trail.filter((t) => t.action !== 'hold');
 
   let actionEntropy: number | null = null;
   if (n > 0) {
@@ -44,7 +44,9 @@ export function computeBehaviour(
     actionEntropy = h / Math.log2(ACTIONS.length);
   }
 
-  const riskCompliance = nonHold.length ? nonHold.filter((t) => !t.clamped).length / nonHold.length : null;
+  // A clamped hold can only be a refused buy/short (hold and close pass the limit unchanged), so it counts as a proposal.
+  const proposals = trail.filter((t) => t.action !== 'hold' || t.clamped);
+  const riskCompliance = proposals.length ? proposals.filter((t) => !t.clamped).length / proposals.length : null;
 
   const losses = trail.filter((t) => t.action === 'close' && t.realizedPnL !== null && t.realizedPnL < 0);
   const repeatedErrorRate = losses.length
@@ -69,9 +71,9 @@ export function computeBehaviour(
   }
   const shockDeRisk = drops.length ? drops.reduce((a, b) => a + b, 0) / drops.length : null;
 
-  return { actionEntropy, riskCompliance, repeatedErrorRate, shockDeRisk, tradeRate: n ? nonHold.length / n : null };
+  return { actionEntropy, riskCompliance, repeatedErrorRate, shockDeRisk, tradeRate: n ? trades / n : null };
 }
 
-/** Shock ticks from the event log. */
+/** Distinct shock ticks from the event log (a random and a director event on one tick count once). */
 export const shockTicks = (log: { tick: number; priceImpactPercent: number }[]): number[] =>
-  log.filter((e) => Math.abs(e.priceImpactPercent) >= BEHAVIOUR_SHOCK_MIN_IMPACT_PCT).map((e) => e.tick);
+  [...new Set(log.filter((e) => Math.abs(e.priceImpactPercent) >= BEHAVIOUR_SHOCK_MIN_IMPACT_PCT).map((e) => e.tick))];
