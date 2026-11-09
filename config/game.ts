@@ -176,6 +176,12 @@ export const EXPERIMENT_MAX_BUDGET_USD = 25;
 export const EXPERIMENT_SERIES_POINTS = 200;
 /** Most decisions one run replay returns; beyond it the payload says `truncated`. */
 export const EXPERIMENT_REPLAY_MAX_DECISIONS = 2000;
+/** A losing close counts as repeated when the same ticker is re-opened in the same direction within this many ticks. */
+export const BEHAVIOUR_REPEAT_WINDOW_TICKS = 50;
+/** Ticks after a market shock over which gross-exposure change is measured. */
+export const BEHAVIOUR_SHOCK_WINDOW_TICKS = 30;
+/** Smallest absolute event price impact (percent) that counts as a market shock. */
+export const BEHAVIOUR_SHOCK_MIN_IMPACT_PCT = 5;
 /** How often the runner looks for a queued experiment. */
 export const EXPERIMENT_POLL_MS = 2_000;
 /** RESEARCH LAB list/detail refetch interval while the view is open. */

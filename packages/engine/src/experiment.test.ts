@@ -375,3 +375,33 @@ describe('async world loop', () => {
     for (const e of r.events) expect(e.tick).toBeGreaterThan(0);
   });
 });
+
+describe('behaviour metrics', () => {
+  it('behaviour is attached to every fund and digests are unchanged', () => {
+    const a = { funds: ALL, directorMode: 'rule' as const, decisionEveryTicks: null, ticks: 600 };
+    const r = simulateWorld(a, 7);
+    expect(r.digest).toBe('52f9903a');
+    for (const f of r.funds) {
+      expect(Object.keys(f.behaviour ?? {}).sort()).toEqual(['actionEntropy', 'repeatedErrorRate', 'riskCompliance', 'shockDeRisk', 'tradeRate']);
+      expect(f.behaviour?.tradeRate).toBe(f.decisions ? f.trades / f.decisions : null);
+      expect(f).not.toHaveProperty('trail');
+      expect(f).not.toHaveProperty('gross');
+    }
+    expect(simulateWorld({ ...a, directorMode: 'none' }, 21).digest).toBe('22858214');
+  });
+
+  it('compareArms reports behaviour means with CI and skips nulls', () => {
+    const withB = (seed: number, entropy: number | null): RunResult => {
+      const r = run(seed, { f: 110 });
+      r.funds[0].behaviour = { actionEntropy: entropy, riskCompliance: null, repeatedErrorRate: null, shockDeRisk: null, tradeRate: 0.5 };
+      return r;
+    };
+    const legacy = run(3, { f: 110 }); // no behaviour field
+    const [arm] = compareArms([{ label: 'A', runs: [withB(1, 0.2), withB(2, 0.4), withB(4, null), legacy] }], 100);
+    const b = arm.funds[0].behaviour;
+    expect(b.actionEntropy?.mean).toBeCloseTo(0.3, 12);
+    expect(b.actionEntropy?.ci).not.toBeNull();
+    expect(b.tradeRate?.mean).toBe(0.5);
+    expect(b.riskCompliance).toBeNull();
+  });
+});

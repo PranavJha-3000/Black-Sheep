@@ -29,6 +29,7 @@ import { applyEvent, applyTrade, createInitialMarket, mulberry32, tickMarket } f
 import { seriesMetrics } from './metrics';
 import { decideByPolicy, enforceRiskLimit } from './policies';
 import { checkLiquidation, liquidateFund, markToMarket } from './portfolio';
+import { computeBehaviour, shockTicks, type Behaviour, type TrailStep } from './behaviour';
 import { bootstrapMeanCI, holm, signTestP } from './stats';
 import {
   applyRivalDecision,
@@ -136,6 +137,10 @@ export interface SimFund {
   liquidated: boolean;
   liquidatedAtTick: number | null;
   navs: number[];
+  /** Gross exposure sampled with each nav point; dropped in summarize. */
+  gross: { tick: number; grossPct: number }[];
+  /** Every applied decision; dropped in summarize. */
+  trail: TrailStep[];
   decisions: number;
   trades: number;
   brain: FundBrain;
@@ -175,6 +180,8 @@ export function initialSimState(arm: ArmConfig, seed: number): SimState {
       liquidated: false,
       liquidatedAtTick: null,
       navs: [],
+      gross: [],
+      trail: [],
       decisions: 0,
       trades: 0,
       brain: arm.brains?.[key] ?? 'policy',
@@ -245,7 +252,12 @@ export function advanceTick(s: SimState): void {
   }
 
   if (s.market.tickCount % SNAPSHOT_EVERY_TICKS === 0) {
-    for (const f of s.funds) f.navs.push(markToMarket(f.fund, s.market).nav);
+    for (const f of s.funds) {
+      const { nav } = markToMarket(f.fund, s.market);
+      f.navs.push(nav);
+      const notional = f.fund.positions.reduce((a, p) => a + Math.abs(p.quantity * (s.market.companies[p.ticker]?.price ?? 0)), 0);
+      f.gross.push({ tick: s.market.tickCount, grossPct: nav > 0 ? (notional / nav) * 100 : 0 });
+    }
   }
 }
 
@@ -259,20 +271,33 @@ function decidingFunds(s: SimState): SimFund[] {
  * Apply decisions one after another, in registry order, on the moving market.
  * Every fund deciding this tick read the same pre-trade market (as in the live world).
  */
-export function applyDecisions(s: SimState, decided: { f: SimFund; decision: RivalDecision }[]): void {
-  for (const { f, decision } of decided) {
+export function applyDecisions(s: SimState, decided: { f: SimFund; decision: RivalDecision; clamped: boolean }[]): void {
+  for (const { f, decision, clamped } of decided) {
     f.decisions++;
     let market = s.market;
     if ((decision.action === 'buy' || decision.action === 'short') && decision.ticker && decision.dollarAmount) {
       const impacted = applyTrade(market, decision.ticker, decision.dollarAmount, decision.action === 'buy' ? 'buy' : 'sell');
       market = { ...market, companies: impacted.companies, recentFlow: impacted.recentFlow };
     }
+    const closing = decision.action === 'close' ? f.fund.positions.find((p) => p.ticker === decision.ticker) : undefined;
     const after = applyRivalDecision(f.fund, decision, market);
+    const realizedPnL = decision.action === 'close' ? (after.lastDecision?.realizedPnL ?? null) : null;
+    f.trail.push({
+      tick: s.market.tickCount,
+      action: decision.action,
+      ticker: decision.ticker ?? null,
+      clamped,
+      realizedPnL,
+      direction: decision.action === 'buy' ? 'long' : decision.action === 'short' ? 'short' : realizedPnL !== null ? (closing?.direction ?? null) : null,
+    });
     if (after.positions !== f.fund.positions) f.trades++;
     f.fund = after;
     s.market = market;
   }
 }
+
+/** True when the risk limit left the proposal's action, ticker and size untouched. */
+const sameDecision = (a: RivalDecision, b: RivalDecision) => a.action === b.action && a.ticker === b.ticker && a.dollarAmount === b.dollarAmount;
 
 /** One synchronous tick with every fund on its policy. */
 export function stepWorld(s: SimState): void {
@@ -280,7 +305,9 @@ export function stepWorld(s: SimState): void {
   const decided = decidingFunds(s).map((f) => {
     const input = buildDecisionInput(f.fund, s.market, s.recentEvents, s.market.recentFlow);
     f.sources.policy++;
-    return { f, decision: enforceRiskLimit(decideByPolicy(f.profile, input), input, f.profile) };
+    const proposed = decideByPolicy(f.profile, input);
+    const decision = enforceRiskLimit(proposed, input, f.profile);
+    return { f, decision, clamped: !sameDecision(proposed, decision) };
   });
   applyDecisions(s, decided);
 }
@@ -296,6 +323,8 @@ export interface RunResult {
     decisions: number;
     trades: number;
     sources: Record<DecisionSource, number>;
+    /** Absent in results stored before Phase 3. */
+    behaviour?: Behaviour;
   }[];
   events: { tick: number; type: string; priceImpactPercent: number; director: boolean }[];
   directorInterventions: number;
@@ -329,16 +358,17 @@ export async function simulateWorldAsync(
     advanceTick(s);
     const tick = s.market.tickCount;
     const inputs = decidingFunds(s).map((f) => ({ f, input: buildDecisionInput(f.fund, s.market, s.recentEvents, s.market.recentFlow) }));
-    const decided: { f: SimFund; decision: RivalDecision; source: DecisionSource }[] = [];
+    const decided: { f: SimFund; decision: RivalDecision; source: DecisionSource; clamped: boolean }[] = [];
     for (const { f, input } of inputs) {
       const out: Omit<DecisionRecord, 'tick' | 'fundKey'> =
         f.brain === 'policy'
           ? { source: 'policy', model: null, decision: decideByPolicy(f.profile, input), costUsd: 0, inputTokens: 0, outputTokens: 0, latencyMs: 0, toolCalls: [], outcome: null }
           : await decide({ fund: f, input: { ...input, memory: f.memory }, tick });
       const decision = enforceRiskLimit(out.decision, input, f.profile);
+      const clamped = !sameDecision(out.decision, decision);
       f.sources[out.source]++;
       costUsd += out.costUsd;
-      decided.push({ f, decision, source: out.source });
+      decided.push({ f, decision, source: out.source, clamped });
       await onDecision?.({ ...out, decision, tick, fundKey: f.profile.key });
     }
     applyDecisions(s, decided);
@@ -349,6 +379,7 @@ export async function simulateWorldAsync(
 
 function summarize(s: SimState, costUsd: number): RunResult {
   const seed = s.seed;
+  const shocks = shockTicks(s.log);
   const funds = s.funds.map((f) => ({
     key: f.profile.key,
     name: f.profile.name,
@@ -358,6 +389,7 @@ function summarize(s: SimState, costUsd: number): RunResult {
     decisions: f.decisions,
     trades: f.trades,
     sources: f.sources,
+    behaviour: { ...computeBehaviour(f.trail, f.gross, shocks), tradeRate: f.decisions ? f.trades / f.decisions : null },
   }));
   const prices = Object.fromEntries(Object.values(s.market.companies).map((c) => [c.ticker, c.price]));
   return {
@@ -453,6 +485,8 @@ export interface FundArmStats {
     /** pSign Holm-adjusted across every vsBaseline in the comparison. */
     pHolm: number;
   } | null;
+  /** Per-metric mean/std over runs (nulls skipped) and bootstrap CI; null when no run has a value. Runs stored before Phase 3 contribute nothing. */
+  behaviour: Record<keyof Behaviour, (Stat & { ci: [number, number] | null }) | null>;
   /** The first arm containing this fund (a mixed world is compared with the fund alone). */
   baselineLabel: string | null;
 }
@@ -476,6 +510,17 @@ function stat(xs: (number | null)[]): Stat {
 }
 
 const mean = (xs: number[]) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : 0);
+
+const BEHAVIOUR_KEYS: (keyof Behaviour)[] = ['actionEntropy', 'riskCompliance', 'repeatedErrorRate', 'shockDeRisk', 'tradeRate'];
+
+function behaviourStats(rows: (Behaviour | undefined)[]): FundArmStats['behaviour'] {
+  return Object.fromEntries(
+    BEHAVIOUR_KEYS.map((k) => {
+      const v = rows.map((b) => b?.[k]).filter((x): x is number => x !== null && x !== undefined && Number.isFinite(x));
+      return [k, v.length ? { ...stat(v), ci: bootstrapMeanCI(v) } : null];
+    }),
+  ) as FundArmStats['behaviour'];
+}
 
 export function compareArms(arms: { label: string; runs: RunResult[] }[], startingCapital = STARTING_CAPITAL): ArmComparison[] {
   const returnsBySeed = (runs: RunResult[], key: string) =>
@@ -514,6 +559,7 @@ export function compareArms(arms: { label: string; runs: RunResult[] }[], starti
         sharpe: stat(m.map((x) => x.sharpe)),
         survival: runs.length ? runs.filter((f) => !f.liquidated).length / runs.length : 0,
         vsBaseline,
+        behaviour: behaviourStats(runs.map((f) => f.behaviour)),
         baselineLabel: baseline?.label ?? null,
       };
     });
