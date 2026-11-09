@@ -19,6 +19,7 @@
     "db:local": "tsx scripts/local-db.ts",
     "db:migrate": "prisma migrate deploy",
     "paper:export": "tsx scripts/export-paper.ts",
+    "study:run": "tsx scripts/run-study.ts",
     "server:dev": "tsx server/index.ts",
     "server:typecheck": "tsc --noEmit -p server"
   },
