@@ -46,3 +46,9 @@ None. Every finished experiment is reported, and failed ones are listed with the
 ## Budget
 
 Each experiment is ≤ $25. The worst-case total is printed by `study:run`, and the user approves it before `--confirm`.
+
+## Amendment 1 (2026-11-10, before any study run)
+
+**H4 statistic.** For each H1 model, H4 is the mean paired total-return difference vs the policy arm (percentage points), divided by the model arm's mean cost per run (USD). Pairs are the same seed pairs as H1. The 95% CI is a percentile bootstrap over seed pairs, resampling (difference, cost) together: 2000 iterations, seeded (seed 1), the same scheme as the other CIs. A resample whose mean cost is $0 is dropped. If the arm's mean cost is $0, H4 is not defined for that model and is reported as such. H4 is descriptive: no sign test or Holm correction. Output: `paper/tables/H4.tex`.
+
+**Resubmission rule.** A failed experiment may be resubmitted under the same name. For each name, only the newest `done` experiment (highest id) counts in the analysis; older done duplicates are ignored, and the exporter says so. Every failed experiment stays listed with its error in `paper/data/failed.csv`.
