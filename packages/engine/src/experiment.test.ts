@@ -139,7 +139,7 @@ describe('compareArms', () => {
     const b = arms[1].funds[0];
     expect(b.survival).toBe(0.5);
     // Seed 1: +0.10, seed 2: -0.10 → mean 0; B beats A on one seed.
-    expect(b.vsBaseline).toEqual({ meanDiff: expect.closeTo(0, 10), wins: 1, pairs: 2 });
+    expect(b.vsBaseline).toMatchObject({ meanDiff: expect.closeTo(0, 10), wins: 1, pairs: 2 });
     expect(b.baselineLabel).toBe('A');
     expect(arms[1].meanDirectorInterventions).toBe(0.5);
   });
@@ -148,6 +148,30 @@ describe('compareArms', () => {
     const [arm] = compareArms([{ label: 'A', runs: [run(1, { f: 110 })] }], 100);
     expect(arm.funds[0].totalReturn.std).toBeNull();
     expect(JSON.stringify(arm)).not.toMatch(/NaN|Infinity/);
+  });
+});
+
+describe('compareArms statistics', () => {
+  it('compareArms reports CI and Holm-adjusted p for paired arms', () => {
+    const seeds = [1, 2, 3, 4, 5];
+    const arms = compareArms(
+      [
+        { label: 'A', runs: seeds.map((s) => run(s, { f: 100 + s, g: 100 })) },
+        { label: 'B', runs: seeds.map((s) => run(s, { f: 100 + s * 2, g: 100 - s })) },
+      ],
+      100,
+    );
+    for (const f of arms[1].funds) {
+      const v = f.vsBaseline!;
+      expect(v.ci).not.toBeNull();
+      expect(v.pSign).toBeGreaterThanOrEqual(0);
+      expect(v.pHolm).toBeGreaterThanOrEqual(v.pSign);
+      expect(v.pHolm).toBeLessThanOrEqual(1);
+      expect(f.totalReturnCI).not.toBeNull();
+    }
+    expect(arms[0].funds[0].vsBaseline).toBeNull();
+    expect(arms[0].fallbackRate).toBeNull();
+    expect(arms[0].meanCostUsd).toBe(0);
   });
 });
 
@@ -203,9 +227,9 @@ describe('compareArms baselines (review I-3)', () => {
     expect(arms[1].funds[0]).toMatchObject({ vsBaseline: null, baselineLabel: null });
     const [f, g] = arms[2].funds;
     expect(f.baselineLabel).toBe('funds=f');
-    expect(f.vsBaseline).toEqual({ meanDiff: expect.closeTo(-0.1, 10), wins: 0, pairs: 1 });
+    expect(f.vsBaseline).toMatchObject({ meanDiff: expect.closeTo(-0.1, 10), wins: 0, pairs: 1 });
     expect(g.baselineLabel).toBe('funds=g');
-    expect(g.vsBaseline).toEqual({ meanDiff: expect.closeTo(0.1, 10), wins: 1, pairs: 1 });
+    expect(g.vsBaseline).toMatchObject({ meanDiff: expect.closeTo(0.1, 10), wins: 1, pairs: 1 });
   });
 });
 

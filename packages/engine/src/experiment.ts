@@ -29,6 +29,7 @@ import { applyEvent, applyTrade, createInitialMarket, mulberry32, tickMarket } f
 import { seriesMetrics } from './metrics';
 import { decideByPolicy, enforceRiskLimit } from './policies';
 import { checkLiquidation, liquidateFund, markToMarket } from './portfolio';
+import { bootstrapMeanCI, holm, signTestP } from './stats';
 import {
   applyRivalDecision,
   buildDecisionInput,
@@ -405,12 +406,23 @@ export interface FundArmStats {
   name: string;
   n: number;
   totalReturn: Stat;
+  /** Percentile bootstrap 95% CI of the mean total return; null below two runs. */
+  totalReturnCI: [number, number] | null;
   maxDrawdown: Stat;
   sharpe: Stat;
   /** Share of runs the fund survived. */
   survival: number;
   /** Paired by seed against this fund's baseline arm; null in the baseline arm itself. */
-  vsBaseline: { meanDiff: number; wins: number; pairs: number } | null;
+  vsBaseline: {
+    meanDiff: number;
+    wins: number;
+    pairs: number;
+    ci: [number, number] | null;
+    /** Exact two-sided sign test on non-tied pairs. */
+    pSign: number;
+    /** pSign Holm-adjusted across every vsBaseline in the comparison. */
+    pHolm: number;
+  } | null;
   /** The first arm containing this fund (a mixed world is compared with the fund alone). */
   baselineLabel: string | null;
 }
@@ -420,6 +432,9 @@ export interface ArmComparison {
   funds: FundArmStats[];
   meanEvents: number;
   meanDirectorInterventions: number;
+  /** fallback / (llm + fallback) over the arm's decisions; null with no model brains. */
+  fallbackRate: number | null;
+  meanCostUsd: number;
 }
 
 function stat(xs: (number | null)[]): Stat {
@@ -436,7 +451,7 @@ export function compareArms(arms: { label: string; runs: RunResult[] }[], starti
   const returnsBySeed = (runs: RunResult[], key: string) =>
     new Map(runs.map((r) => [r.seed, seriesMetrics(r.funds.find((f) => f.key === key)?.navs ?? [], startingCapital).totalReturn]));
 
-  return arms.map((arm, i) => {
+  const out = arms.map((arm, i) => {
     const keys = [...new Set(arm.runs.flatMap((r) => r.funds.map((f) => f.key)))];
     const funds = keys.map((key): FundArmStats => {
       const runs = arm.runs.map((r) => r.funds.find((f) => f.key === key)).filter((f) => f !== undefined);
@@ -452,13 +467,19 @@ export function compareArms(arms: { label: string; runs: RunResult[] }[], starti
           const b = base.get(seed);
           if (r !== null && r !== undefined && b !== null && b !== undefined) diffs.push(r - b);
         }
-        vsBaseline = diffs.length ? { meanDiff: mean(diffs), wins: diffs.filter((d) => d > 0).length, pairs: diffs.length } : null;
+        if (diffs.length) {
+          const wins = diffs.filter((d) => d > 0).length;
+          const decisive = diffs.filter((d) => d !== 0).length;
+          // pHolm is filled in below, once every arm's p-value is known.
+          vsBaseline = { meanDiff: mean(diffs), wins, pairs: diffs.length, ci: bootstrapMeanCI(diffs), pSign: signTestP(wins, decisive), pHolm: 1 };
+        }
       }
       return {
         key,
         name: runs[0]?.name ?? key,
         n: runs.length,
         totalReturn: stat(m.map((x) => x.totalReturn)),
+        totalReturnCI: bootstrapMeanCI(m.map((x) => x.totalReturn).filter((x): x is number => x !== null && Number.isFinite(x))),
         maxDrawdown: stat(m.map((x) => x.maxDrawdown)),
         sharpe: stat(m.map((x) => x.sharpe)),
         survival: runs.length ? runs.filter((f) => !f.liquidated).length / runs.length : 0,
@@ -466,13 +487,21 @@ export function compareArms(arms: { label: string; runs: RunResult[] }[], starti
         baselineLabel: baseline?.label ?? null,
       };
     });
+    const sources = arm.runs.flatMap((r) => r.funds.map((f) => f.sources));
+    const fallback = sources.reduce((a, s) => a + s.fallback, 0);
+    const modelCalls = fallback + sources.reduce((a, s) => a + s.llm, 0);
     return {
       label: arm.label,
       funds,
       meanEvents: mean(arm.runs.map((r) => r.events.length)),
       meanDirectorInterventions: mean(arm.runs.map((r) => r.directorInterventions)),
+      fallbackRate: modelCalls > 0 ? fallback / modelCalls : null,
+      meanCostUsd: mean(arm.runs.map((r) => r.costUsd)),
     };
   });
+  const tested = out.flatMap((a) => a.funds).flatMap((f) => (f.vsBaseline ? [f.vsBaseline] : []));
+  holm(tested.map((v) => v.pSign)).forEach((p, i) => (tested[i].pHolm = p));
+  return out;
 }
 
 /** At most n evenly spaced points, always keeping the first and last. */
