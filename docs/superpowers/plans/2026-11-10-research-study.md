@@ -90,7 +90,7 @@ Recording follows the live `rememberDecision` (server/world.ts:633). Memory is c
 
   In `experiment.test.ts`:
   - `memory does not change policy-only digests`: the pinned seed 7 / 21 specs with `memory: 'full'` still give `52f9903a` / `22858214`.
-  - `model fund sees its episodes on the next decision`: a stub `DecideFn` that buys once, then asserts the next `ctx.input.memory.length === 1`.
+  - `model fund sees its episodes on the next decision`: arm `memory: 'episodic'`, a model brain on one fund, and a stub `DecideFn` that buys once then holds. It asserts the next `ctx.input.memory.length === 1`; with `memory: 'none'` the length stays `0`.
   - `spec without memory keeps its configHash`.
 - [ ] **Step 2: Run** `npx vitest run packages/engine/src/simMemory.test.ts packages/engine/src/experiment.test.ts`. Expected: FAIL (module missing).
 - [ ] **Step 3: Implement** `simMemory.ts`, then wire it into `simulateWorldAsync`:
