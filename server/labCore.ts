@@ -15,6 +15,7 @@ import {
   type DecisionRecord,
   type DecisionSource,
   type FundBrain,
+  type MemoryMode,
   type ExperimentSpec,
   type ExperimentManifest,
   type ExperimentVariable,
@@ -81,11 +82,16 @@ function checkBrains(x: unknown): Check<Record<string, FundBrain>> {
   return { ok: true, value: out };
 }
 
+function checkMemory(x: unknown): Check<MemoryMode> {
+  return x === 'none' || x === 'episodic' || x === 'reflective' || x === 'full' ? { ok: true, value: x } : fail('memory must be one of none, episodic, reflective, full.');
+}
+
 const VALUE_CHECKS: Record<ExperimentVariable, (x: unknown) => Check<unknown>> = {
   directorMode: checkDirector,
   funds: checkFunds,
   decisionEveryTicks: checkCadence,
   brains: checkBrains,
+  memory: checkMemory,
 };
 
 function checkBase(x: unknown): Check<ArmConfig> {
@@ -101,11 +107,19 @@ function checkBase(x: unknown): Check<ArmConfig> {
     return fail(`Ticks must be an integer ${MIN_TICKS}–${EXPERIMENT_MAX_TICKS}.`);
   }
   const config: ArmConfig = { funds: funds.value, directorMode: directorMode.value, decisionEveryTicks: cadence.value, ticks: b.ticks };
-  if (b.brains === undefined) return { ok: true, value: config };
-  const brains = checkBrains(b.brains);
-  if (!brains.ok) return brains;
-  // An all-policy map is left out, so the spec (and its configHash) equals one that never named brains.
-  return { ok: true, value: Object.keys(brains.value).length ? { ...config, brains: brains.value } : config };
+  if (b.brains !== undefined) {
+    const brains = checkBrains(b.brains);
+    if (!brains.ok) return brains;
+    // An all-policy map is left out, so the spec (and its configHash) equals one that never named brains.
+    if (Object.keys(brains.value).length) config.brains = brains.value;
+  }
+  // Left absent unless given, so old specs keep their configHash.
+  if (b.memory !== undefined) {
+    const memory = checkMemory(b.memory);
+    if (!memory.ok) return memory;
+    config.memory = memory.value;
+  }
+  return { ok: true, value: config };
 }
 
 /**

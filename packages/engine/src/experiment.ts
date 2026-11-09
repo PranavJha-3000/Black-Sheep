@@ -38,6 +38,10 @@ import {
   type RivalDecisionInput,
   type RivalFund,
 } from './rival';
+import type { MemoryEntry } from './memory';
+import { updateSimMemory, type MemoryMode } from './simMemory';
+
+export type { MemoryMode };
 import type { MarketEvent, MarketState } from './types';
 
 // ---------------------------------------------------------------------------
@@ -57,9 +61,11 @@ export interface ArmConfig {
   ticks: number;
   /** Fund key -> brain; a missing key (or the whole map) means 'policy'. */
   brains?: Record<string, FundBrain>;
+  /** In-world memory for model-backed funds; absent means 'none'. */
+  memory?: MemoryMode;
 }
 
-export const EXPERIMENT_VARIABLES = ['directorMode', 'funds', 'decisionEveryTicks', 'brains'] as const;
+export const EXPERIMENT_VARIABLES = ['directorMode', 'funds', 'decisionEveryTicks', 'brains', 'memory'] as const;
 export type ExperimentVariable = (typeof EXPERIMENT_VARIABLES)[number];
 
 export interface ExperimentSpec {
@@ -134,6 +140,8 @@ export interface SimFund {
   trades: number;
   brain: FundBrain;
   sources: Record<DecisionSource, number>;
+  /** Only written for model-backed funds, per the arm's memory mode. */
+  memory: MemoryEntry[];
 }
 
 export interface SimState {
@@ -171,6 +179,7 @@ export function initialSimState(arm: ArmConfig, seed: number): SimState {
       trades: 0,
       brain: arm.brains?.[key] ?? 'policy',
       sources: { policy: 0, llm: 0, fallback: 0 },
+      memory: [],
     };
   });
   return {
@@ -315,23 +324,25 @@ export async function simulateWorldAsync(
 ): Promise<RunResult> {
   const s = initialSimState(arm, seed);
   let costUsd = 0;
+  const memoryMode = arm.memory ?? 'none';
   for (let i = 0; i < arm.ticks; i++) {
     advanceTick(s);
     const tick = s.market.tickCount;
     const inputs = decidingFunds(s).map((f) => ({ f, input: buildDecisionInput(f.fund, s.market, s.recentEvents, s.market.recentFlow) }));
-    const decided: { f: SimFund; decision: RivalDecision }[] = [];
+    const decided: { f: SimFund; decision: RivalDecision; source: DecisionSource }[] = [];
     for (const { f, input } of inputs) {
       const out: Omit<DecisionRecord, 'tick' | 'fundKey'> =
         f.brain === 'policy'
           ? { source: 'policy', model: null, decision: decideByPolicy(f.profile, input), costUsd: 0, inputTokens: 0, outputTokens: 0, latencyMs: 0, toolCalls: [], outcome: null }
-          : await decide({ fund: f, input, tick });
+          : await decide({ fund: f, input: { ...input, memory: f.memory }, tick });
       const decision = enforceRiskLimit(out.decision, input, f.profile);
       f.sources[out.source]++;
       costUsd += out.costUsd;
-      decided.push({ f, decision });
+      decided.push({ f, decision, source: out.source });
       await onDecision?.({ ...out, decision, tick, fundKey: f.profile.key });
     }
     applyDecisions(s, decided);
+    updateSimMemory(s.funds, decided, tick, memoryMode, (f) => markToMarket(f.fund, s.market).nav);
   }
   return summarize(s, costUsd);
 }

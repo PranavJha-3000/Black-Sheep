@@ -279,6 +279,42 @@ describe('async world loop', () => {
     expect(simulateWorld({ ...a, directorMode: 'none' }, 21).digest).toBe('22858214');
   });
 
+  it('memory does not change policy-only digests', () => {
+    const a = { funds: ALL, directorMode: 'rule' as const, decisionEveryTicks: null, ticks: 600, memory: 'full' as const };
+    expect(simulateWorld(a, 7).digest).toBe('52f9903a');
+    expect(simulateWorld({ ...a, directorMode: 'none' }, 21).digest).toBe('22858214');
+  });
+
+  it('model fund sees its episodes on the next decision', async () => {
+    const lengths = async (memory: 'none' | 'episodic') => {
+      const seen: number[] = [];
+      let bought = false;
+      const arm: ArmConfig = { ...base, funds: ['crown-meridian'], ticks: 300, memory, brains: { 'crown-meridian': 'claude-haiku-5-5' } };
+      await simulateWorldAsync(arm, 3, async ({ input }) => {
+        seen.push(input.memory?.length ?? -1);
+        const buy = !bought;
+        bought = true;
+        return {
+          source: 'llm', model: 'claude-haiku-5-5', costUsd: 0, inputTokens: 0, outputTokens: 0, latencyMs: 0, toolCalls: [], outcome: null,
+          decision: buy
+            ? { action: 'buy', ticker: input.companies[0].ticker, dollarAmount: 1000, reasoning: 'x', confidence: 1 }
+            : { action: 'hold', reasoning: 'x' },
+        } as never;
+      });
+      return seen;
+    };
+    const on = await lengths('episodic');
+    expect(on[0]).toBe(0);
+    expect(on[1]).toBe(1);
+    expect((await lengths('none')).every((n) => n === 0)).toBe(true);
+  });
+
+  it('spec without memory keeps its configHash', () => {
+    const spec: ExperimentSpec = { name: 'x', base, variable: 'directorMode', values: ['none', 'rule'], seeds: [1] };
+    expect(canonicalJson(spec)).not.toContain('memory');
+    expect(experimentManifest({ ...spec, base: { ...base, memory: undefined } }).configHash).toBe(experimentManifest(spec).configHash);
+  });
+
   it('simulateWorldAsync with no model brains matches simulateWorld', async () => {
     for (const seed of [1, 2, 3]) {
       const sync = simulateWorld(base, seed);

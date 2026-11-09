@@ -60,6 +60,18 @@ describe('parseExperimentRequest', () => {
   });
 });
 
+describe('parseExperimentRequest: memory', () => {
+  it('accepts memory as the variable', () => {
+    const r = parseExperimentRequest(body({ variable: 'memory', values: ['none', 'episodic', 'full'] }), KEYED);
+    expect(r.ok && r.spec.values).toEqual(['none', 'episodic', 'full']);
+  });
+
+  it('rejects an unknown memory mode', () => {
+    expect(parseExperimentRequest(body({ variable: 'memory', values: ['none', 'total'] }), KEYED)).toEqual({ ok: false, error: 'memory must be one of none, episodic, reflective, full.' });
+    expect(parseExperimentRequest(body({ base: { ...body().base, memory: 'x' } }), KEYED).ok).toBe(false);
+  });
+});
+
 describe('parseExperimentRequest: model brains and budget', () => {
   const brains = (over: Record<string, unknown> = {}) =>
     body({ variable: 'brains', values: [{}, { 'crown-meridian': 'claude-haiku-5-5' }], budgetUsd: 5, ...over });
