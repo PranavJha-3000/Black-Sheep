@@ -59,7 +59,7 @@ export interface ArmConfig {
   brains?: Record<string, FundBrain>;
 }
 
-export const EXPERIMENT_VARIABLES = ['directorMode', 'funds', 'decisionEveryTicks'] as const;
+export const EXPERIMENT_VARIABLES = ['directorMode', 'funds', 'decisionEveryTicks', 'brains'] as const;
 export type ExperimentVariable = (typeof EXPERIMENT_VARIABLES)[number];
 
 export interface ExperimentSpec {
@@ -69,10 +69,18 @@ export interface ExperimentSpec {
   /** One arm per value; each fund's baseline is the first arm that contains it. */
   values: unknown[];
   seeds: number[];
+  /** Hard USD cap on model calls across the whole experiment; absent/null when every fund is on its policy. */
+  budgetUsd?: number | null;
 }
 
 export function armLabel(variable: ExperimentVariable, value: unknown): string {
-  return `${variable}=${Array.isArray(value) ? value.join('+') : String(value)}`;
+  if (Array.isArray(value)) return `${variable}=${value.join('+')}`;
+  // A brains map: fund:brain pairs; an empty map is the all-policy arm.
+  if (value && typeof value === 'object') {
+    const pairs = Object.entries(value).map(([k, v]) => `${k}:${String(v)}`);
+    return `${variable}=${pairs.length ? pairs.join('+') : 'policy'}`;
+  }
+  return `${variable}=${String(value)}`;
 }
 
 export function expandArms(spec: ExperimentSpec): { label: string; config: ArmConfig }[] {

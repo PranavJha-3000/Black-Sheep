@@ -170,6 +170,8 @@ export const EXPERIMENT_MAX_TICKS = 5000;
 export const EXPERIMENT_MAX_SEEDS = 10;
 /** Most arms (values of the varied variable) per experiment. */
 export const EXPERIMENT_MAX_ARMS = 6;
+/** Hard USD cap an experiment with any model brain may declare as its budgetUsd. */
+export const EXPERIMENT_MAX_BUDGET_USD = 25;
 /** NAV points kept per fund per arm for charts (the first seed's run). */
 export const EXPERIMENT_SERIES_POINTS = 200;
 /** How often the runner looks for a queued experiment. */

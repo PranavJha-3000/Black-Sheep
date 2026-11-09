@@ -6,20 +6,27 @@ import {
   expandArms,
   EXPERIMENT_VARIABLES,
   simulateWorld,
+  simulateWorldAsync,
   type ArmComparison,
   type ArmConfig,
+  type DecisionRecord,
+  type FundBrain,
   type ExperimentSpec,
   type ExperimentManifest,
   type ExperimentVariable,
   type RunResult,
 } from '@black-sheep/engine/experiment';
 import { FUND_PROFILES, getFundProfile } from '@black-sheep/engine/funds';
+import { MODEL_REGISTRY } from '../config/models';
 import {
   EXPERIMENT_MAX_ARMS,
+  EXPERIMENT_MAX_BUDGET_USD,
   EXPERIMENT_MAX_SEEDS,
   EXPERIMENT_MAX_TICKS,
   EXPERIMENT_SERIES_POINTS,
 } from '../config/game';
+import { armModelFunds, estimateExperimentCostUsd, makeExperimentDecide, type ExperimentBudget } from './labBrain';
+import type { CreateMessage } from './providers/anthropic';
 
 /**
  * labCore — PURE Research Lab rules (VISION §10, D-032, D-033): validate an
@@ -54,10 +61,24 @@ function checkCadence(x: unknown): Check<number | null> {
   return isInt(x) && x >= 1 && x <= MAX_CADENCE ? { ok: true, value: x } : fail(`Decision cadence must be null or an integer 1–${MAX_CADENCE}.`);
 }
 
+/** Fund key -> 'policy' | model id. 'policy' entries are dropped: absent already means policy. */
+function checkBrains(x: unknown): Check<Record<string, FundBrain>> {
+  if (!x || typeof x !== 'object' || Array.isArray(x)) return fail('Brains must be an object of fund key -> policy or a model id.');
+  const out: Record<string, FundBrain> = {};
+  for (const [k, v] of Object.entries(x)) {
+    if (!getFundProfile(k)) return fail(`Unknown fund key in brains: ${k}.`);
+    if (v === 'policy') continue;
+    if (typeof v !== 'string' || !Object.prototype.hasOwnProperty.call(MODEL_REGISTRY, v)) return fail(`Unknown brain for ${k}: ${String(v)} (use 'policy' or a model id).`);
+    out[k] = v as FundBrain;
+  }
+  return { ok: true, value: out };
+}
+
 const VALUE_CHECKS: Record<ExperimentVariable, (x: unknown) => Check<unknown>> = {
   directorMode: checkDirector,
   funds: checkFunds,
   decisionEveryTicks: checkCadence,
+  brains: checkBrains,
 };
 
 function checkBase(x: unknown): Check<ArmConfig> {
@@ -72,11 +93,22 @@ function checkBase(x: unknown): Check<ArmConfig> {
   if (!isInt(b.ticks) || b.ticks < MIN_TICKS || b.ticks > EXPERIMENT_MAX_TICKS) {
     return fail(`Ticks must be an integer ${MIN_TICKS}–${EXPERIMENT_MAX_TICKS}.`);
   }
-  return { ok: true, value: { funds: funds.value, directorMode: directorMode.value, decisionEveryTicks: cadence.value, ticks: b.ticks } };
+  const config: ArmConfig = { funds: funds.value, directorMode: directorMode.value, decisionEveryTicks: cadence.value, ticks: b.ticks };
+  if (b.brains === undefined) return { ok: true, value: config };
+  const brains = checkBrains(b.brains);
+  if (!brains.ok) return brains;
+  // An all-policy map is left out, so the spec (and its configHash) equals one that never named brains.
+  return { ok: true, value: Object.keys(brains.value).length ? { ...config, brains: brains.value } : config };
 }
 
-/** Validate an untrusted create request. Everything a run needs is checked here, before anything is stored. */
-export function parseExperimentRequest(body: unknown): { ok: true; spec: ExperimentSpec } | { ok: false; error: string } {
+/**
+ * Validate an untrusted create request. Everything a run needs is checked here, before anything is stored.
+ * `providerConfigured`: whether the server holds a model provider key (model brains need one).
+ */
+export function parseExperimentRequest(
+  body: unknown,
+  opts: { providerConfigured: boolean },
+): { ok: true; spec: ExperimentSpec } | { ok: false; error: string } {
   if (!body || typeof body !== 'object') return fail('Request body must be a JSON object.');
   const b = body as Record<string, unknown>;
 
@@ -113,7 +145,18 @@ export function parseExperimentRequest(body: unknown): { ok: true; spec: Experim
   if (!seeds.every((s) => isInt(s) && s >= 0 && s <= MAX_SEED)) return fail(`Seeds must be integers 0–${MAX_SEED}.`);
   if (new Set(seeds).size !== seeds.length) return fail('Seeds must be distinct.');
 
-  return { ok: true, spec: { name, base: base.value, variable, values, seeds: seeds as number[] } };
+  const budgetUsd = b.budgetUsd ?? null;
+  if (budgetUsd !== null && !(typeof budgetUsd === 'number' && Number.isFinite(budgetUsd) && budgetUsd > 0 && budgetUsd <= EXPERIMENT_MAX_BUDGET_USD)) {
+    return fail(`budgetUsd must be a number above 0 and at most $${EXPERIMENT_MAX_BUDGET_USD}.`);
+  }
+
+  const spec: ExperimentSpec = { name, base: base.value, variable, values, seeds: seeds as number[] };
+  if (budgetUsd !== null) spec.budgetUsd = budgetUsd;
+  if (hasModelBrains(spec)) {
+    if (!opts.providerConfigured) return fail('Model brains need a provider key on the server.');
+    if (budgetUsd === null) return fail(`budgetUsd is required when any fund uses a model (max $${EXPERIMENT_MAX_BUDGET_USD}).`);
+  }
+  return { ok: true, spec };
 }
 
 const digest = (s: string) => createHash('sha256').update(s).digest();
@@ -136,15 +179,39 @@ export interface ExperimentResult {
   series: { label: string; funds: { key: string; navs: number[] }[] }[];
   /** Per-run fingerprints: rerunning a seed must reproduce its digest. */
   runs: { label: string; runs: { seed: number; digest: string; liquidated: string[] }[] }[];
+  /** Model spend actually incurred across every run; 0 for policy-only experiments. */
+  costUsd: number;
+  /** Worst-case model spend the spec allowed for (estimateExperimentCostUsd). */
+  estimateUsd: number;
 }
 
-/** Run every arm on every seed; `yieldFn` runs between runs so the server's event loop stays responsive. */
-export async function runExperimentSpec(spec: ExperimentSpec, yieldFn: () => Promise<void>): Promise<ExperimentResult> {
+/** Whether any arm has a roster fund decided by a model. */
+const hasModelBrains = (spec: ExperimentSpec) => expandArms(spec).some((a) => armModelFunds(a.config).length > 0);
+
+/**
+ * Run every arm on every seed; `yieldFn` runs between runs so the server's event loop stays responsive.
+ * Arms with no model brain run the sync policy world (unchanged digests). Model arms call `deps.create`
+ * against one budget shared by the whole experiment; a BudgetExhausted error ends the experiment.
+ */
+export async function runExperimentSpec(
+  spec: ExperimentSpec,
+  yieldFn: () => Promise<void>,
+  deps?: { create: CreateMessage | null; onDecision?: (arm: string, seed: number, r: DecisionRecord) => Promise<void> },
+): Promise<ExperimentResult> {
+  const estimateUsd = estimateExperimentCostUsd(spec);
+  const create = deps?.create ?? null;
+  if (hasModelBrains(spec) && !create) throw new Error('Model brains need a provider key on the server.');
+  const budget: ExperimentBudget = { limitUsd: spec.budgetUsd ?? 0, spentUsd: 0 };
+  const onDecision = deps?.onDecision;
   const arms: { label: string; runs: RunResult[] }[] = [];
   for (const arm of expandArms(spec)) {
     const runs: RunResult[] = [];
     for (const seed of spec.seeds) {
-      runs.push(simulateWorld(arm.config, seed));
+      runs.push(
+        armModelFunds(arm.config).length === 0 || !create
+          ? simulateWorld(arm.config, seed)
+          : await simulateWorldAsync(arm.config, seed, makeExperimentDecide(create, budget), onDecision && ((r) => onDecision(arm.label, seed, r))),
+      );
       await yieldFn();
     }
     arms.push({ label: arm.label, runs });
@@ -159,6 +226,8 @@ export async function runExperimentSpec(spec: ExperimentSpec, yieldFn: () => Pro
       label: a.label,
       runs: a.runs.map((r) => ({ seed: r.seed, digest: r.digest, liquidated: r.funds.filter((f) => f.liquidated).map((f) => f.key) })),
     })),
+    costUsd: budget.spentUsd,
+    estimateUsd,
   };
 }
 

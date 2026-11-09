@@ -51,7 +51,7 @@ labRouter.post(
       res.status(401).json({ error: 'A valid lab admin token is required to create experiments.' });
       return;
     }
-    const parsed = parseExperimentRequest(req.body);
+    const parsed = parseExperimentRequest(req.body, { providerConfigured: Boolean(process.env.ANTHROPIC_API_KEY) });
     if (!parsed.ok) {
       res.status(400).json({ error: parsed.error });
       return;

@@ -1,7 +1,12 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { buildExperimentDetail, buildExperimentSummary, checkLabToken, parseExperimentRequest, runExperimentSpec, type ExperimentRow } from './labCore';
+import { BudgetExhausted } from './labBrain';
+import { estimateCallCostUsd } from './budget';
+import type { CreateMessage } from './providers/anthropic';
+import { DECISION_MAX_TOKENS, DECISION_PROMPT_TOKENS_ESTIMATE, MAX_TOOL_ROUNDS } from '../config/game';
 
 const ALL = ['sterling-vale', 'halden-whitmore', 'crown-meridian'];
+const KEYED = { providerConfigured: true };
 const body = (over: Record<string, unknown> = {}) => ({
   name: 'Director on/off',
   variable: 'directorMode',
@@ -13,14 +18,14 @@ const body = (over: Record<string, unknown> = {}) => ({
 
 describe('parseExperimentRequest', () => {
   it('accepts a valid one-variable experiment', () => {
-    const r = parseExperimentRequest(body());
+    const r = parseExperimentRequest(body(), KEYED);
     expect(r).toEqual({ ok: true, spec: body() });
   });
 
   it('accepts each variable with valid values and trims the name', () => {
-    expect(parseExperimentRequest(body({ variable: 'funds', values: [['crown-meridian'], ALL] })).ok).toBe(true);
-    expect(parseExperimentRequest(body({ variable: 'decisionEveryTicks', values: [null, 5, 30] })).ok).toBe(true);
-    const r = parseExperimentRequest(body({ name: '  spaced  ' }));
+    expect(parseExperimentRequest(body({ variable: 'funds', values: [['crown-meridian'], ALL] }), KEYED).ok).toBe(true);
+    expect(parseExperimentRequest(body({ variable: 'decisionEveryTicks', values: [null, 5, 30] }), KEYED).ok).toBe(true);
+    const r = parseExperimentRequest(body({ name: '  spaced  ' }), KEYED);
     expect(r.ok && r.spec.name).toBe('spaced');
   });
 
@@ -47,9 +52,52 @@ describe('parseExperimentRequest', () => {
     ['negative seed', body({ seeds: [-1] })],
     ['non-integer seed', body({ seeds: [1.5] })],
   ])('rejects %s', (_label, input) => {
-    const r = parseExperimentRequest(input);
+    const r = parseExperimentRequest(input, KEYED);
     expect(r.ok).toBe(false);
     expect(!r.ok && r.error.length).toBeGreaterThan(5);
+  });
+});
+
+describe('parseExperimentRequest: model brains and budget', () => {
+  const brains = (over: Record<string, unknown> = {}) =>
+    body({ variable: 'brains', values: [{}, { 'crown-meridian': 'claude-haiku-5-5' }], budgetUsd: 5, ...over });
+
+  it('accepts a brains experiment with a budget', () => {
+    const r = parseExperimentRequest(brains(), KEYED);
+    expect(r.ok && r.spec).toMatchObject({ variable: 'brains', budgetUsd: 5, values: [{}, { 'crown-meridian': 'claude-haiku-5-5' }] });
+  });
+
+  it('rejects model brains without a provider', () => {
+    expect(parseExperimentRequest(brains(), { providerConfigured: false })).toEqual({ ok: false, error: 'Model brains need a provider key on the server.' });
+    // A model brain set on the base counts too.
+    const viaBase = body({ base: { ...body().base, brains: { 'sterling-vale': 'claude-opus-5-5' } }, budgetUsd: 5 });
+    expect(parseExperimentRequest(viaBase, { providerConfigured: false })).toEqual({ ok: false, error: 'Model brains need a provider key on the server.' });
+  });
+
+  it('requires budgetUsd for model brains', () => {
+    const error = 'budgetUsd is required when any fund uses a model (max $25).';
+    expect(parseExperimentRequest(brains({ budgetUsd: undefined }), KEYED)).toEqual({ ok: false, error });
+    expect(parseExperimentRequest(brains({ budgetUsd: null }), KEYED)).toEqual({ ok: false, error });
+  });
+
+  it.each([0, -1, 25.01, Number.NaN, '5', Infinity])('rejects budgetUsd %s', (budgetUsd) => {
+    expect(parseExperimentRequest(brains({ budgetUsd }), KEYED).ok).toBe(false);
+    expect(parseExperimentRequest(body({ budgetUsd }), KEYED).ok).toBe(false);
+  });
+
+  it('rejects unknown model ids in brains', () => {
+    expect(parseExperimentRequest(brains({ values: [{}, { 'crown-meridian': 'gpt-9' }] }), KEYED).ok).toBe(false);
+    expect(parseExperimentRequest(brains({ values: [{}, { 'apex-capital': 'claude-haiku-5-5' }] }), KEYED).ok).toBe(false);
+    expect(parseExperimentRequest(brains({ values: [{}, ['crown-meridian']] }), KEYED).ok).toBe(false);
+    const badBase = body({ base: { ...body().base, brains: { 'crown-meridian': 'gpt-9' } } });
+    expect(parseExperimentRequest(badBase, KEYED).ok).toBe(false);
+  });
+
+  it('policy-only spec needs no budget', () => {
+    const r = parseExperimentRequest(body(), { providerConfigured: false });
+    expect(r).toEqual({ ok: true, spec: body() });
+    // An all-policy brains map is policy-only as well.
+    expect(parseExperimentRequest(body({ base: { ...body().base, brains: { 'crown-meridian': 'policy' } } }), { providerConfigured: false }).ok).toBe(true);
   });
 });
 
@@ -68,7 +116,7 @@ describe('checkLabToken', () => {
 describe('runExperimentSpec', () => {
   it('runs every arm on every seed, yielding between runs, and returns paired comparisons and series', async () => {
     let yields = 0;
-    const parsed = parseExperimentRequest(body({ seeds: [1, 2] }));
+    const parsed = parseExperimentRequest(body({ seeds: [1, 2] }), KEYED);
     if (!parsed.ok) throw new Error(parsed.error);
     const r = await runExperimentSpec(parsed.spec, async () => {
       yields++;
@@ -79,6 +127,51 @@ describe('runExperimentSpec', () => {
     expect(r.runs.map((a) => a.runs.map((x) => x.seed))).toEqual([[1, 2], [1, 2]]);
     expect(r.series[0].funds[0].navs.length).toBeGreaterThan(10);
     expect(JSON.stringify(r)).not.toMatch(/NaN|Infinity/);
+    expect(r.costUsd).toBe(0);
+    expect(r.estimateUsd).toBe(0);
+  });
+
+  const modelSpec = (budgetUsd: number) => {
+    const parsed = parseExperimentRequest(
+      body({ variable: 'brains', values: [{}, { 'crown-meridian': 'claude-haiku-5-5' }], seeds: [1], budgetUsd }),
+      KEYED,
+    );
+    if (!parsed.ok) throw new Error(parsed.error);
+    return parsed.spec;
+  };
+  // Every call answers with a hold through submit_decision: $0.0002 of haiku usage.
+  const create = vi.fn(async () => ({
+    id: 'm', type: 'message', role: 'assistant', model: 'claude-haiku-5-5', stop_reason: 'tool_use',
+    content: [{ type: 'tool_use', id: 't', name: 'submit_decision', input: { action: 'hold', reasoning: 'calm', confidence: 0.5 } }],
+    usage: { input_tokens: 1000, output_tokens: 200 },
+  })) as never as CreateMessage & ReturnType<typeof vi.fn>;
+
+  it('runs model brains through the injected provider and reports cost and estimate', async () => {
+    create.mockClear();
+    const seen: string[] = [];
+    const r = await runExperimentSpec(modelSpec(25), async () => {}, { create, onDecision: async (arm, _seed, d) => void seen.push(`${arm}:${d.source}`) });
+    expect(create.mock.calls.length).toBeGreaterThan(0);
+    expect(r.costUsd).toBeCloseTo(create.mock.calls.length * 0.0002, 10);
+    expect(r.estimateUsd).toBeGreaterThan(r.costUsd);
+    expect(r.arms[1].fallbackRate).toBe(0);
+    // Policy-only arm: no decisions reported, never a model call.
+    expect(seen.every((s) => s.startsWith('brains=crown-meridian:claude-haiku-5-5:'))).toBe(true);
+  });
+
+  it('a budget exhausted mid-run stops the experiment before the next call', async () => {
+    create.mockClear();
+    const seen: unknown[] = [];
+    // Room for exactly one worst-case call, so the second must be refused.
+    const budget = estimateCallCostUsd('claude-haiku-5-5', MAX_TOOL_ROUNDS, DECISION_MAX_TOKENS, DECISION_PROMPT_TOKENS_ESTIMATE);
+    const err = await runExperimentSpec(modelSpec(budget), async () => {}, { create, onDecision: async (_a, _s, d) => void seen.push(d) }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(BudgetExhausted);
+    expect((err as Error).message).toBe('budget exhausted at $0.00');
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(seen.length).toBeGreaterThan(0);
+  });
+
+  it('refuses a model-backed spec with no provider', async () => {
+    await expect(runExperimentSpec(modelSpec(5), async () => {}, { create: null })).rejects.toThrow('Model brains need a provider key on the server.');
   });
 });
 

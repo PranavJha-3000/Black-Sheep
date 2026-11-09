@@ -16,6 +16,7 @@ import {
   type RunResult,
 } from './experiment';
 import { openPosition } from './portfolio';
+import { getFundProfile } from './funds';
 import { STARTING_CAPITAL } from '../../../config/game';
 
 const ALL = ['sterling-vale', 'halden-whitmore', 'crown-meridian'];
@@ -284,6 +285,25 @@ describe('async world loop', () => {
       }
     }
     expect(r.costUsd).toBeCloseTo(calls.length * 0.01);
+  });
+
+  it("the risk limit clamps a model's oversized buy", async () => {
+    const arm: ArmConfig = { ...base, funds: ['crown-meridian'], brains: { 'crown-meridian': 'claude-haiku-5-5' } };
+    const seen: DecisionRecord[] = [];
+    await simulateWorldAsync(
+      arm,
+      3,
+      async ({ input }) => ({
+        source: 'llm', model: 'claude-haiku-5-5', costUsd: 0, inputTokens: 0, outputTokens: 0, latencyMs: 0, toolCalls: [], outcome: null,
+        decision: { action: 'buy', ticker: input.companies[0].ticker, dollarAmount: 1e12, reasoning: 'all in', confidence: 1 },
+      }),
+      (d) => void seen.push(d),
+    );
+    const first = seen[0];
+    const cap = STARTING_CAPITAL * getFundProfile('crown-meridian')!.maxPositionFraction;
+    expect(first.decision.action).toBe('buy');
+    expect(first.decision.dollarAmount).toBeGreaterThan(0);
+    expect(first.decision.dollarAmount).toBeLessThanOrEqual(cap);
   });
 
   it('onDecision sees every decision in tick order', async () => {

@@ -1,6 +1,7 @@
 import { experimentManifest } from '@black-sheep/engine/experiment';
 import { prisma } from './db';
 import { parseExperimentRequest, runExperimentSpec } from './labCore';
+import { anthropicCreate, type CreateMessage } from './providers/anthropic';
 import { EXPERIMENT_POLL_MS } from '../config/game';
 
 /**
@@ -9,6 +10,10 @@ import { EXPERIMENT_POLL_MS } from '../config/game';
  * experiment runs at a time in this process; between runs the runner yields
  * to the event loop so the live 5 s tick keeps its schedule.
  */
+
+const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY ?? '';
+/** The provider call for model brains, or null when no key is configured (as in server/world.ts). */
+const createMessage: CreateMessage | null = ANTHROPIC_API_KEY ? anthropicCreate(ANTHROPIC_API_KEY) : null;
 
 let busy = false;
 
@@ -34,9 +39,9 @@ export async function runNextExperiment(): Promise<boolean> {
     if (claimed.count === 0) return false;
     try {
       // Re-validated: the stored spec is data, and the limits may have changed since it was queued.
-      const parsed = parseExperimentRequest(JSON.parse(next.specJson));
+      const parsed = parseExperimentRequest(JSON.parse(next.specJson), { providerConfigured: createMessage !== null });
       if (!parsed.ok) throw new Error(parsed.error);
-      const result = await runExperimentSpec(parsed.spec, yieldToEventLoop);
+      const result = await runExperimentSpec(parsed.spec, yieldToEventLoop, { create: createMessage });
       await prisma.experiment.update({
         where: { id: next.id },
         // The manifest is recomputed here so it describes the code and config that actually ran (a queued
