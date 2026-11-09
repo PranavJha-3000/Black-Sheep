@@ -267,18 +267,51 @@ model DirectorDecisionLog {
 /// across arms, every arm run on the same seeds, independent of the live
 /// world. Spec, reproducibility manifest and results are stored as JSON.
 model Experiment {
-  id           Int       @id @default(autoincrement())
-  createdAt    DateTime  @default(now())
-  name         String
+  id             Int                  @id @default(autoincrement())
+  createdAt      DateTime             @default(now())
+  name           String
   /// queued | running | done | failed
-  status       String    @default("queued")
-  variable     String
-  specJson     String
-  manifestJson String
-  resultJson   String?
-  error        String?
-  startedAt    DateTime?
-  finishedAt   DateTime?
+  status         String               @default("queued")
+  variable       String
+  specJson       String
+  manifestJson   String
+  resultJson     String?
+  error          String?
+  startedAt      DateTime?
+  finishedAt     DateTime?
+  /// Model spend actually incurred (USD); 0 for policy-only experiments.
+  costUsd        Float                @default(0)
+  /// Any arm has a model-decided fund: such a run is never re-queued after a restart (it would pay twice).
+  hasModelBrains Boolean              @default(false)
+  decisions      ExperimentDecision[]
 
   @@index([status, id])
+}
+
+/// Every decision of every experiment run (policy, model and fallback), so a
+/// run can be replayed and exported. Written in one batch per run.
+model ExperimentDecision {
+  id            Int        @id @default(autoincrement())
+  experimentId  Int
+  experiment    Experiment @relation(fields: [experimentId], references: [id], onDelete: Cascade)
+  arm           String
+  seed          Int
+  tick          Int
+  fundKey       String
+  /// policy | llm | fallback
+  source        String
+  model         String?
+  action        String
+  ticker        String?
+  dollarAmount  Float?
+  confidence    Float?
+  reasoning     String
+  costUsd       Float
+  inputTokens   Int
+  outputTokens  Int
+  latencyMs     Int
+  toolCallsJson String
+  outcome       String?
+
+  @@index([experimentId, arm, seed, tick])
 }

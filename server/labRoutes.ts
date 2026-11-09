@@ -57,12 +57,15 @@ labRouter.post(
       return;
     }
     const { spec } = parsed;
+    const manifest = experimentManifest(spec);
     const row = await prisma.experiment.create({
       data: {
         name: spec.name,
         variable: spec.variable,
         specJson: JSON.stringify(spec),
-        manifestJson: JSON.stringify(experimentManifest(spec)),
+        manifestJson: JSON.stringify(manifest),
+        // Same engine rule as the manifest: a model-backed experiment is never re-queued after a restart.
+        hasModelBrains: !manifest.policyOnly,
       },
     });
     res.status(201).json({ id: row.id });

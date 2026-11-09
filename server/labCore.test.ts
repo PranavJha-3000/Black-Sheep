@@ -131,6 +131,19 @@ describe('runExperimentSpec', () => {
     expect(r.estimateUsd).toBe(0);
   });
 
+  it('reports policy decisions to a sink without changing the result', async () => {
+    const parsed = parseExperimentRequest(body({ seeds: [1, 2] }), KEYED);
+    if (!parsed.ok) throw new Error(parsed.error);
+    const plain = await runExperimentSpec(parsed.spec, async () => {});
+    const seen: string[] = [];
+    const sunk = await runExperimentSpec(parsed.spec, async () => {}, { create: null, onDecision: async (_a, _s, d) => void seen.push(d.source) });
+    // Same digests (and everything else) as the sync policy world.
+    expect(sunk).toEqual(plain);
+    expect(seen.length).toBeGreaterThan(0);
+    expect(seen.every((s) => s === 'policy')).toBe(true);
+    expect(Object.keys(plain.runs[0].runs[0].navs)).toEqual(parsed.spec.base.funds);
+  });
+
   const modelSpec = (budgetUsd: number) => {
     const parsed = parseExperimentRequest(
       body({ variable: 'brains', values: [{}, { 'crown-meridian': 'claude-haiku-5-5' }], seeds: [1], budgetUsd }),
@@ -154,9 +167,10 @@ describe('runExperimentSpec', () => {
     expect(r.costUsd).toBeCloseTo(create.mock.calls.length * 0.0002, 10);
     expect(r.estimateUsd).toBeGreaterThan(r.costUsd);
     expect(r.arms[1].fallbackRate).toBe(0);
-    // Policy-only arm: no decisions reported, never a model call.
-    expect(seen.length).toBeGreaterThan(0);
-    expect(seen.every((s) => s.startsWith('brains=crown-meridian:claude-haiku-5-5:'))).toBe(true);
+    // Both arms report decisions (stored for replay); only the model arm ever reaches the model.
+    expect(seen.some((s) => s.startsWith('brains=crown-meridian:claude-haiku-5-5:llm'))).toBe(true);
+    expect(seen.filter((s) => !s.startsWith('brains=crown-meridian:claude-haiku-5-5:')).every((s) => s.endsWith(':policy'))).toBe(true);
+    expect(seen.some((s) => !s.startsWith('brains=crown-meridian:claude-haiku-5-5:'))).toBe(true);
   });
 
   it('a budget exhausted mid-run stops the experiment before the next call', async () => {

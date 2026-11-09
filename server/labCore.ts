@@ -10,7 +10,9 @@ import {
   simulateWorldAsync,
   type ArmComparison,
   type ArmConfig,
+  type DecideFn,
   type DecisionRecord,
+  type DecisionSource,
   type FundBrain,
   type ExperimentSpec,
   type ExperimentManifest,
@@ -179,8 +181,21 @@ export interface ExperimentResult {
   arms: ArmComparison[];
   /** NAV series of the first seed's run, per arm and fund, downsampled for charts. */
   series: { label: string; funds: { key: string; navs: number[] }[] }[];
-  /** Per-run fingerprints: rerunning a seed must reproduce its digest. */
-  runs: { label: string; runs: { seed: number; digest: string; liquidated: string[] }[] }[];
+  /** Per-run fingerprints (rerunning a seed must reproduce its digest) and the series a replay draws. */
+  runs: {
+    label: string;
+    runs: {
+      seed: number;
+      digest: string;
+      liquidated: string[];
+      /** Fund key -> NAV series, downsampled to EXPERIMENT_SERIES_POINTS. */
+      navs: Record<string, number[]>;
+      events: RunResult['events'];
+      /** Fund key -> decision counts by source. */
+      sources: Record<string, Record<DecisionSource, number>>;
+      costUsd: number;
+    }[];
+  }[];
   /** Model spend actually incurred across every run; 0 for policy-only experiments. */
   costUsd: number;
   /** Worst-case model spend the spec allowed for (estimateExperimentCostUsd). */
@@ -192,7 +207,8 @@ const hasModelBrains = (spec: ExperimentSpec) => expandArms(spec).some((a) => ar
 
 /**
  * Run every arm on every seed; `yieldFn` runs between runs so the server's event loop stays responsive.
- * Arms with no model brain run the sync policy world (unchanged digests). Model arms call `deps.create`
+ * Arms with no model brain and no decision sink run the sync policy world; with a sink they run the async
+ * world (identical digests) so every policy decision is reported too. Model arms call `deps.create`
  * against one budget shared by the whole experiment; a BudgetExhausted error ends the experiment.
  */
 export async function runExperimentSpec(
@@ -205,14 +221,16 @@ export async function runExperimentSpec(
   if (hasModelBrains(spec) && !create) throw new Error('Model brains need a provider key on the server.');
   const budget: ExperimentBudget = { limitUsd: spec.budgetUsd ?? 0, spentUsd: 0 };
   const onDecision = deps?.onDecision;
+  // Fresh per run (the gate state is per world). Policy funds never reach `decide`, so a policy-only arm needs no provider.
+  const decideFor = (): DecideFn => (create ? makeExperimentDecide(create, budget) : () => Promise.reject(new Error('Model brains need a provider key on the server.')));
   const arms: { label: string; runs: RunResult[] }[] = [];
   for (const arm of expandArms(spec)) {
     const runs: RunResult[] = [];
     for (const seed of spec.seeds) {
       runs.push(
-        armModelFunds(arm.config).length === 0 || !create
+        armModelFunds(arm.config).length === 0 && !onDecision
           ? simulateWorld(arm.config, seed)
-          : await simulateWorldAsync(arm.config, seed, makeExperimentDecide(create, budget), onDecision && ((r) => onDecision(arm.label, seed, r))),
+          : await simulateWorldAsync(arm.config, seed, decideFor(), onDecision && ((r) => onDecision(arm.label, seed, r))),
       );
       await yieldFn();
     }
@@ -226,7 +244,15 @@ export async function runExperimentSpec(
     })),
     runs: arms.map((a) => ({
       label: a.label,
-      runs: a.runs.map((r) => ({ seed: r.seed, digest: r.digest, liquidated: r.funds.filter((f) => f.liquidated).map((f) => f.key) })),
+      runs: a.runs.map((r) => ({
+        seed: r.seed,
+        digest: r.digest,
+        liquidated: r.funds.filter((f) => f.liquidated).map((f) => f.key),
+        navs: Object.fromEntries(r.funds.map((f) => [f.key, downsample(f.navs, EXPERIMENT_SERIES_POINTS)])),
+        events: r.events,
+        sources: Object.fromEntries(r.funds.map((f) => [f.key, f.sources])),
+        costUsd: r.costUsd,
+      })),
     })),
     costUsd: budget.spentUsd,
     estimateUsd,

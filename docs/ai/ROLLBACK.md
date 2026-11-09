@@ -1,5 +1,12 @@
 # Rollback
 
+## Stage 9 experiment decisions migration · 2026-11-09
+Safe commit: `578894f` (branch `feat/stage9-research-lab`, before Task 4).
+Revert with: `git revert <Task 4 commit>` (branch unmerged), or after merge `git revert -m 1 <merge commit>`.
+Files touched: `prisma/schema.prisma`, `prisma/migrations/20261109000000_experiment_decisions/` (new), `server/{experiments,experiments.test,labCore,labRoutes}.ts`, `docs/ai/ROLLBACK.md`.
+Non-code changes to undo: migration `20261109000000_experiment_decisions` creates table `ExperimentDecision` and adds columns `Experiment.costUsd`, `Experiment.hasModelBrains` (both defaulted). If applied, reverted code ignores them; to drop them: `DROP TABLE "ExperimentDecision"; ALTER TABLE "Experiment" DROP COLUMN "costUsd", DROP COLUMN "hasModelBrains";` and delete its `_prisma_migrations` row. The extra `resultJson` fields (`runs[].runs[].navs/events/sources/costUsd`) are additive; reverted code reads old and new results alike. Never edit the applied migration.
+Re-check after rollback: `npm run typecheck`; `npm test`; `npm run lint`; `npm run build`; `npx prisma validate`.
+
 ## Stage 8 Research Lab · 2026-11-02
 Safe commit: `596ed04` (main). Work lives on branch `feat/stage8-research-lab`.
 Revert with: `git switch main` (branch unmerged), or after merge `git revert -m 1 <merge commit>`.
