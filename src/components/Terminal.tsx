@@ -11,13 +11,13 @@ import FundDetailView from "./FundDetailView";
 import ActivityView from "./ActivityView";
 import AnalyticsView from "./AnalyticsView";
 import ResearchLabView from "./ResearchLabView";
+import TimelineView from "./TimelineView";
 import { useGameStore, NAV_ITEMS } from "../store/gameStore";
 import { cx } from "./fmt";
 
 /**
  * The observation terminal (VISION §13). Humans watch; nothing here trades.
- * WORLD, FUNDS, FUND DETAIL, ACTIVITY, RESEARCH LAB and ANALYTICS are live;
- * TIMELINE is listed but arrives in a later stage.
+ * WORLD, FUNDS, FUND DETAIL, ACTIVITY, TIMELINE, RESEARCH LAB and ANALYTICS are live.
  */
 export default function Terminal() {
   useEffect(() => {
@@ -53,6 +53,7 @@ export default function Terminal() {
               {view === "activity" && <ActivityView />}
               {view === "analytics" && <AnalyticsView />}
               {view === "lab" && <ResearchLabView />}
+              {view === "timeline" && <TimelineView />}
             </div>
           </div>
         </main>

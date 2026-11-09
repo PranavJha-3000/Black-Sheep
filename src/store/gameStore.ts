@@ -16,17 +16,28 @@ import type { WorldStatePayload } from '../../server/worldCore';
 import type { ActivityPayload, FundTracePayload } from '../../server/observerCore';
 import type { AnalyticsPayload } from '../../server/analyticsCore';
 import type { ExperimentDetail, ExperimentSummary } from '../../server/labCore';
+import type { LeaderboardRow } from '../../server/leaderboardCore';
 import { ANALYTICS_POLL_MS, LAB_POLL_MS, STARTING_CAPITAL } from '../../config/game';
 
-/** Observer navigation (VISION §13). TIMELINE comes later. */
-export type ObserverView = 'world' | 'funds' | 'fund' | 'activity' | 'analytics' | 'lab';
+/** Observer navigation (VISION §13). */
+export type ObserverView = 'world' | 'funds' | 'fund' | 'activity' | 'analytics' | 'lab' | 'timeline';
+
+/** The run a TIMELINE card selected (Task 10 replays it). */
+export interface SelectedRun {
+  experimentId: number;
+  arm: string;
+  seed: number;
+}
+
+/** How many of the newest done experiments TIMELINE loads runs from. */
+export const CHRONICLE_MAX_EXPERIMENTS = 10;
 /** Sidebar order; a null view is listed but not live yet. */
 export const NAV_ITEMS: { label: string; view: ObserverView | null }[] = [
   { label: 'World', view: 'world' },
   { label: 'Funds', view: 'funds' },
   { label: 'Fund Detail', view: 'fund' },
   { label: 'Activity', view: 'activity' },
-  { label: 'Timeline', view: null },
+  { label: 'Timeline', view: 'timeline' },
   { label: 'Research Lab', view: 'lab' },
   { label: 'Analytics', view: 'analytics' },
 ];
@@ -45,6 +56,10 @@ export interface GameStoreState {
   openFund: (fundId: number) => void;
   /** RESEARCH LAB (fetched only in that view). */
   lab: { list: ExperimentSummary[] | null; detail: ExperimentDetail | null };
+  /** TIMELINE archive (fetched only in that view): the leaderboard and done experiments' details by id. */
+  chronicle: { board: LeaderboardRow[] | null; list: ExperimentSummary[] | null; details: Record<number, ExperimentDetail> };
+  selectedRun: SelectedRun | null;
+  selectRun: (run: SelectedRun | null) => void;
   selectedExperimentId: number | null;
   openExperiment: (id: number) => void;
   /** POST a new experiment. The admin token is used for this request only and never stored. */
@@ -113,7 +128,7 @@ const SEED_FUND = createFund(STARTING_CAPITAL, 0);
 
 type SeedState = Omit<
   GameStoreState,
-  'reset' | 'selectTicker' | 'poll' | 'selectedTicker' | 'view' | 'selectedFundId' | 'trace' | 'activity' | 'analytics' | 'setView' | 'openFund' | 'lab' | 'selectedExperimentId' | 'openExperiment' | 'createExperiment' | 'estimateExperiment'
+  'reset' | 'selectTicker' | 'poll' | 'selectedTicker' | 'view' | 'selectedFundId' | 'trace' | 'activity' | 'analytics' | 'setView' | 'openFund' | 'lab' | 'chronicle' | 'selectedRun' | 'selectRun' | 'selectedExperimentId' | 'openExperiment' | 'createExperiment' | 'estimateExperiment'
 >;
 
 function seedState(): SeedState {
@@ -157,6 +172,8 @@ function seedState(): SeedState {
 let analyticsFetchedAt = 0;
 /** When the lab list was last fetched; 0 forces a fetch. */
 let labFetchedAt = 0;
+/** When the chronicle archive was last fetched; 0 forces a fetch. */
+let chronicleFetchedAt = 0;
 
 export const useGameStore = create<GameStoreState>((set, get) => ({
   ...seedState(),
@@ -167,6 +184,8 @@ export const useGameStore = create<GameStoreState>((set, get) => ({
   activity: null,
   analytics: null,
   lab: { list: null, detail: null },
+  chronicle: { board: null, list: null, details: {} },
+  selectedRun: null,
   selectedExperimentId: null,
   // ---------------------------------------------------------------------------
   // Actions
@@ -177,6 +196,7 @@ export const useGameStore = create<GameStoreState>((set, get) => ({
   setView: (view: ObserverView) => {
     analyticsFetchedAt = 0;
     labFetchedAt = 0;
+    chronicleFetchedAt = 0;
     set({ view });
     void get().poll();
   },
@@ -184,6 +204,7 @@ export const useGameStore = create<GameStoreState>((set, get) => ({
     set({ view: 'fund', selectedFundId: fundId, trace: null });
     void get().poll();
   },
+  selectRun: (run) => set({ selectedRun: run }),
   openExperiment: (id: number) => {
     labFetchedAt = 0;
     set({ view: 'lab', selectedExperimentId: id, lab: { ...get().lab, detail: null } });
@@ -211,6 +232,7 @@ export const useGameStore = create<GameStoreState>((set, get) => ({
       const { priceHistory, navHistory, rivalDecisionKey, fundId, view, selectedFundId } = get();
       // Only the open view's investigation endpoint is polled.
       if (view === 'lab') void fetchLab();
+      if (view === 'timeline') void fetchChronicle();
       const wantAnalytics = view === 'analytics' && Date.now() - analyticsFetchedAt >= ANALYTICS_POLL_MS;
       if (wantAnalytics) analyticsFetchedAt = Date.now();
       const [raw, trace, activity, analytics] = await Promise.all([
@@ -293,4 +315,27 @@ async function fetchLab(): Promise<void> {
       detail: detail && id === selectedExperimentId ? detail : lab.detail,
     },
   });
+}
+
+/** TIMELINE: leaderboard + list, then details of the newest done experiments not yet held (done results never change). */
+async function fetchChronicle(): Promise<void> {
+  if (Date.now() - chronicleFetchedAt < LAB_POLL_MS) return;
+  chronicleFetchedAt = Date.now();
+  const [board, list] = await Promise.all([
+    apiFetch<{ leaderboard: LeaderboardRow[] }>('/lab/leaderboard').catch(() => null),
+    apiFetch<{ experiments: ExperimentSummary[] }>('/lab/experiments').catch(() => null),
+  ]);
+  const { chronicle, lab } = useGameStore.getState();
+  const experiments = list?.experiments ?? chronicle.list;
+  const newest = (experiments ?? [])
+    .filter((e) => e.status === 'done')
+    .sort((a, b) => b.id - a.id)
+    .slice(0, CHRONICLE_MAX_EXPERIMENTS);
+  const details = { ...chronicle.details };
+  // Reuse the lab view's open detail; fetch only what is still missing.
+  if (lab.detail && newest.some((e) => e.id === lab.detail!.id)) details[lab.detail.id] = lab.detail;
+  const missing = newest.filter((e) => !details[e.id]);
+  const fetched = await Promise.all(missing.map((e) => apiFetch<ExperimentDetail>(`/lab/experiments/${e.id}`).catch(() => null)));
+  for (const d of fetched) if (d) details[d.id] = d;
+  useGameStore.setState({ chronicle: { board: board?.leaderboard ?? chronicle.board, list: experiments, details } });
 }
