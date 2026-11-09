@@ -21,6 +21,7 @@ import {
   STARTING_CAPITAL,
 } from '../../../config/game';
 import * as GAME_CONFIG from '../../../config/game';
+import type { ModelId } from '../../../config/models';
 import { buildDirectorEvent, isMajorEvent, observeWorld, ruleDirector, validateIntervention } from './director';
 import { generateEvent, initialScheduler, maybeFireScriptedEvent, type SchedulerState } from './events';
 import { FUND_PROFILES, getFundProfile, type FundProfile } from './funds';
@@ -28,12 +29,22 @@ import { applyEvent, applyTrade, createInitialMarket, mulberry32, tickMarket } f
 import { seriesMetrics } from './metrics';
 import { decideByPolicy, enforceRiskLimit } from './policies';
 import { checkLiquidation, liquidateFund, markToMarket } from './portfolio';
-import { applyRivalDecision, buildDecisionInput, createRivalFund, type RivalFund } from './rival';
+import {
+  applyRivalDecision,
+  buildDecisionInput,
+  createRivalFund,
+  type RivalDecision,
+  type RivalDecisionInput,
+  type RivalFund,
+} from './rival';
 import type { MarketEvent, MarketState } from './types';
 
 // ---------------------------------------------------------------------------
 // Configuration
 // ---------------------------------------------------------------------------
+
+/** Who decides for a fund: its deterministic policy, or a model. */
+export type FundBrain = 'policy' | ModelId;
 
 export interface ArmConfig {
   /** Registry fund keys present in this world. */
@@ -43,6 +54,8 @@ export interface ArmConfig {
   /** Every fund's decision cadence; null keeps each registry cadence. */
   decisionEveryTicks: number | null;
   ticks: number;
+  /** Fund key -> brain; a missing key (or the whole map) means 'policy'. */
+  brains?: Record<string, FundBrain>;
 }
 
 export const EXPERIMENT_VARIABLES = ['directorMode', 'funds', 'decisionEveryTicks'] as const;
@@ -72,6 +85,24 @@ export function expandArms(spec: ExperimentSpec): { label: string; config: ArmCo
 // Simulation
 // ---------------------------------------------------------------------------
 
+export type DecisionSource = 'policy' | 'llm' | 'fallback';
+
+export interface DecisionRecord {
+  tick: number;
+  fundKey: string;
+  source: DecisionSource;
+  model: string | null;
+  decision: RivalDecision;
+  costUsd: number;
+  inputTokens: number;
+  outputTokens: number;
+  latencyMs: number;
+  toolCalls: { name: string; ok: boolean }[];
+  outcome: string | null;
+}
+
+export type DecideFn = (ctx: { fund: SimFund; input: RivalDecisionInput; tick: number }) => Promise<Omit<DecisionRecord, 'tick' | 'fundKey'>>;
+
 export interface SimFund {
   profile: FundProfile;
   every: number;
@@ -82,6 +113,8 @@ export interface SimFund {
   navs: number[];
   decisions: number;
   trades: number;
+  brain: FundBrain;
+  sources: Record<DecisionSource, number>;
 }
 
 export interface SimState {
@@ -91,7 +124,7 @@ export interface SimState {
   scheduler: SchedulerState;
   /** Newest first, capped at EVENT_BUFFER (what funds see). */
   recentEvents: MarketEvent[];
-  log: { type: string; priceImpactPercent: number; director: boolean }[];
+  log: { tick: number; type: string; priceImpactPercent: number; director: boolean }[];
   lastEventTick: number | null;
   lastInterventionTick: number | null;
   directorInterventions: number;
@@ -117,6 +150,8 @@ export function initialSimState(arm: ArmConfig, seed: number): SimState {
       navs: [],
       decisions: 0,
       trades: 0,
+      brain: arm.brains?.[key] ?? 'policy',
+      sources: { policy: 0, llm: 0, fallback: 0 },
     };
   });
   return {
@@ -133,8 +168,8 @@ export function initialSimState(arm: ArmConfig, seed: number): SimState {
   };
 }
 
-/** Advance one tick, in the live tick's order (server/world.ts tickWorld + decideFund). */
-export function stepWorld(s: SimState): void {
+/** Market, events, director, liquidations and NAV snapshots for one tick (server/world.ts tickWorld). */
+export function advanceTick(s: SimState): void {
   const rng = mulberry32((s.seed ^ Math.imul(s.market.tickCount + 1, 0x85ebca6b)) >>> 0);
   let next = tickMarket(s.market, s.seed);
   const scripted = maybeFireScriptedEvent(next, s.scheduler, rng);
@@ -177,25 +212,27 @@ export function stepWorld(s: SimState): void {
   for (const e of [evt, directorEvt]) {
     if (!e) continue;
     s.recentEvents = [e, ...s.recentEvents].slice(0, EVENT_BUFFER);
-    s.log.push({ type: e.type, priceImpactPercent: e.priceImpactPercent, director: e === directorEvt });
+    s.log.push({ tick: s.market.tickCount, type: e.type, priceImpactPercent: e.priceImpactPercent, director: e === directorEvt });
     if (isMajorEvent(e)) s.lastEventTick = s.market.tickCount;
   }
 
   if (s.market.tickCount % SNAPSHOT_EVERY_TICKS === 0) {
     for (const f of s.funds) f.navs.push(markToMarket(f.fund, s.market).nav);
   }
+}
 
-  // Each fund on its own slot, never once liquidated. As in the live world,
-  // every fund deciding this tick reads the same pre-trade market; the trades
-  // then apply one after another, in registry order, on the moving market.
+/** Funds whose decision slot is this tick, never once liquidated. */
+function decidingFunds(s: SimState): SimFund[] {
   const t = s.market.tickCount;
-  const deciding = s.funds
-    .filter((f) => !f.liquidated && t !== 0 && t % f.every === f.offset)
-    .map((f) => {
-      const input = buildDecisionInput(f.fund, s.market, s.recentEvents, s.market.recentFlow);
-      return { f, decision: enforceRiskLimit(decideByPolicy(f.profile, input), input, f.profile) };
-    });
-  for (const { f, decision } of deciding) {
+  return s.funds.filter((f) => !f.liquidated && t !== 0 && t % f.every === f.offset);
+}
+
+/**
+ * Apply decisions one after another, in registry order, on the moving market.
+ * Every fund deciding this tick read the same pre-trade market (as in the live world).
+ */
+export function applyDecisions(s: SimState, decided: { f: SimFund; decision: RivalDecision }[]): void {
+  for (const { f, decision } of decided) {
     f.decisions++;
     let market = s.market;
     if ((decision.action === 'buy' || decision.action === 'short') && decision.ticker && decision.dollarAmount) {
@@ -209,6 +246,17 @@ export function stepWorld(s: SimState): void {
   }
 }
 
+/** One synchronous tick with every fund on its policy. */
+export function stepWorld(s: SimState): void {
+  advanceTick(s);
+  const decided = decidingFunds(s).map((f) => {
+    const input = buildDecisionInput(f.fund, s.market, s.recentEvents, s.market.recentFlow);
+    f.sources.policy++;
+    return { f, decision: enforceRiskLimit(decideByPolicy(f.profile, input), input, f.profile) };
+  });
+  applyDecisions(s, decided);
+}
+
 export interface RunResult {
   seed: number;
   funds: {
@@ -219,9 +267,12 @@ export interface RunResult {
     liquidatedAtTick: number | null;
     decisions: number;
     trades: number;
+    sources: Record<DecisionSource, number>;
   }[];
-  events: { type: string; priceImpactPercent: number; director: boolean }[];
+  events: { tick: number; type: string; priceImpactPercent: number; director: boolean }[];
   directorInterventions: number;
+  /** Sum of model-call costs; 0 for policy-only runs. */
+  costUsd: number;
   /** fnv1a of final prices and every NAV series: equal digests = the same world. */
   digest: string;
 }
@@ -229,6 +280,45 @@ export interface RunResult {
 export function simulateWorld(arm: ArmConfig, seed: number): RunResult {
   const s = initialSimState(arm, seed);
   for (let i = 0; i < arm.ticks; i++) stepWorld(s);
+  return summarize(s, 0);
+}
+
+/**
+ * Same world, but funds with a model brain decide through the injected `decide`
+ * (sequentially, registry order). The model proposes, the risk limit disposes.
+ * Policy funds never touch `decide`.
+ */
+export async function simulateWorldAsync(
+  arm: ArmConfig,
+  seed: number,
+  decide: DecideFn,
+  onDecision?: (r: DecisionRecord) => void | Promise<void>,
+): Promise<RunResult> {
+  const s = initialSimState(arm, seed);
+  let costUsd = 0;
+  for (let i = 0; i < arm.ticks; i++) {
+    advanceTick(s);
+    const tick = s.market.tickCount;
+    const inputs = decidingFunds(s).map((f) => ({ f, input: buildDecisionInput(f.fund, s.market, s.recentEvents, s.market.recentFlow) }));
+    const decided: { f: SimFund; decision: RivalDecision }[] = [];
+    for (const { f, input } of inputs) {
+      const out: Omit<DecisionRecord, 'tick' | 'fundKey'> =
+        f.brain === 'policy'
+          ? { source: 'policy', model: null, decision: decideByPolicy(f.profile, input), costUsd: 0, inputTokens: 0, outputTokens: 0, latencyMs: 0, toolCalls: [], outcome: null }
+          : await decide({ fund: f, input, tick });
+      const decision = enforceRiskLimit(out.decision, input, f.profile);
+      f.sources[out.source]++;
+      costUsd += out.costUsd;
+      decided.push({ f, decision });
+      await onDecision?.({ ...out, decision, tick, fundKey: f.profile.key });
+    }
+    applyDecisions(s, decided);
+  }
+  return summarize(s, costUsd);
+}
+
+function summarize(s: SimState, costUsd: number): RunResult {
+  const seed = s.seed;
   const funds = s.funds.map((f) => ({
     key: f.profile.key,
     name: f.profile.name,
@@ -237,6 +327,7 @@ export function simulateWorld(arm: ArmConfig, seed: number): RunResult {
     liquidatedAtTick: f.liquidatedAtTick,
     decisions: f.decisions,
     trades: f.trades,
+    sources: f.sources,
   }));
   const prices = Object.fromEntries(Object.values(s.market.companies).map((c) => [c.ticker, c.price]));
   return {
@@ -244,6 +335,7 @@ export function simulateWorld(arm: ArmConfig, seed: number): RunResult {
     funds,
     events: s.log,
     directorInterventions: s.directorInterventions,
+    costUsd,
     digest: fnv1a(canonicalJson({ prices, navs: funds.map((f) => f.navs), tick: s.market.tickCount })),
   };
 }

@@ -8,6 +8,8 @@ import {
   fnv1a,
   initialSimState,
   simulateWorld,
+  simulateWorldAsync,
+  type DecisionRecord,
   stepWorld,
   type ArmConfig,
   type ExperimentSpec,
@@ -113,9 +115,9 @@ function run(seed: number, navEnd: Record<string, number>, liquidated: string[] 
   return {
     seed,
     funds: Object.entries(navEnd).map(([key, end]) => ({
-      key, name: key.toUpperCase(), navs: [100, end], liquidated: liquidated.includes(key), liquidatedAtTick: null, decisions: 1, trades: 1,
+      key, name: key.toUpperCase(), navs: [100, end], liquidated: liquidated.includes(key), liquidatedAtTick: null, decisions: 1, trades: 1, sources: { policy: 1, llm: 0, fallback: 0 },
     })),
-    events: [], directorInterventions: seed % 2, digest: 'x',
+    events: [], directorInterventions: seed % 2, costUsd: 0, digest: 'x',
   };
 }
 
@@ -218,5 +220,58 @@ describe('policy funds survive their own market (D-034)', () => {
       }
     }
     expect(liquidated).toBeLessThanOrEqual(2);
+  });
+});
+
+describe('async world loop', () => {
+  const policyDecide = async () => {
+    throw new Error('policy funds must never reach decide');
+  };
+
+  it('policy digests are unchanged by the async split', () => {
+    const a = { funds: ALL, directorMode: 'rule' as const, decisionEveryTicks: null, ticks: 600 };
+    expect(simulateWorld(a, 7).digest).toBe('52f9903a');
+    expect(simulateWorld({ ...a, directorMode: 'none' }, 21).digest).toBe('22858214');
+  });
+
+  it('simulateWorldAsync with no model brains matches simulateWorld', async () => {
+    for (const seed of [1, 2, 3]) {
+      const sync = simulateWorld(base, seed);
+      const async_ = await simulateWorldAsync(base, seed, policyDecide);
+      expect(async_.digest).toBe(sync.digest);
+      expect(async_.funds.map((f) => f.sources)).toEqual(sync.funds.map((f) => f.sources));
+      expect(async_.costUsd).toBe(0);
+    }
+  });
+
+  it('brains routes only model funds to the injected decide', async () => {
+    const calls: string[] = [];
+    const arm: ArmConfig = { ...base, brains: { 'crown-meridian': 'claude-haiku-5-5' } };
+    const r = await simulateWorldAsync(arm, 5, async ({ fund }) => {
+      calls.push(fund.profile.key);
+      return { source: 'llm', model: 'claude-haiku-5-5', decision: { action: 'hold', reasoning: 'stub' } as never, costUsd: 0.01, inputTokens: 1, outputTokens: 1, latencyMs: 1, toolCalls: [], outcome: null };
+    });
+    expect(new Set(calls)).toEqual(new Set(['crown-meridian']));
+    for (const f of r.funds) {
+      if (f.key === 'crown-meridian') expect(f.sources.llm).toBe(calls.length);
+      else {
+        expect(f.sources.policy).toBeGreaterThan(0);
+        expect(f.sources.llm).toBe(0);
+      }
+    }
+    expect(r.costUsd).toBeCloseTo(calls.length * 0.01);
+  });
+
+  it('onDecision sees every decision in tick order', async () => {
+    const seen: DecisionRecord[] = [];
+    const r = await simulateWorldAsync(base, 4, policyDecide, (d) => void seen.push(d));
+    expect(seen.length).toBe(r.funds.reduce((n, f) => n + f.decisions, 0));
+    for (let i = 1; i < seen.length; i++) expect(seen[i].tick).toBeGreaterThanOrEqual(seen[i - 1].tick);
+  });
+
+  it('events carry their tick', () => {
+    const r = simulateWorld(base, 7);
+    expect(r.events.length).toBeGreaterThan(0);
+    for (const e of r.events) expect(e.tick).toBeGreaterThan(0);
   });
 });
