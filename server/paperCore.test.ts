@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { holm } from '@black-sheep/engine/stats';
 import { STARTING_CAPITAL } from '../config/game';
-import { pairedContrasts, studyRows, svgForest, texTable, toCsv, type Contrast, type StudyRow } from './paperCore';
+import { buildPaperFiles, pairedContrasts, studyRows, svgForest, texTable, toCsv, type Contrast, type StudyRow } from './paperCore';
 
 const M = 'claude-opus-5-5';
 const nav = (ret: number) => [STARTING_CAPITAL, STARTING_CAPITAL * (1 + ret)];
@@ -105,5 +105,26 @@ describe('formatters', () => {
     expect(svg).toContain('height="160"');
     expect(svg).toContain('a &amp; b &lt;x&gt;');
     expect(svgForest(contrasts, 'T & U', 'exp=1 cfg=abc')).toBe(svg);
+  });
+});
+
+describe('texTable edge cases', () => {
+  it('prints a dash instead of a degenerate CI when n < 2, and escapes ^ and ~', () => {
+    const tex = texTable([{ arm: 'a^b~c', n: 1, meanDiff: 1, ci: [1, 1], pSign: 1, pHolm: 1 }], 'c', 'l', 't');
+    expect(tex).toContain('—');
+    expect(tex).not.toContain('[1.00, 1.00]');
+    expect(tex).toContain('a\\textasciicircum{}b\\textasciitilde{}c');
+  });
+});
+
+describe('buildPaperFiles', () => {
+  it('emits csv, a table and forest per hypothesis, returns figure for H1 only, all tagged', () => {
+    const files = buildPaperFiles([exp(1, 'study:H1:a', [0, 0, 0], [0.1, 0.1, 0.1]), exp(2, 'study:H3:a', [0, 0, 0], [0.2, 0.2, 0.2])]);
+    expect(files.map((f) => f.path)).toEqual([
+      'paper/data/study.csv', 'paper/tables/H1.tex', 'paper/figures/H1-forest.svg', 'paper/figures/H1-returns.svg', 'paper/tables/H3.tex', 'paper/figures/H3-forest.svg',
+    ]);
+    expect(files[1].content.split('\n')[0]).toMatch(/^% exp=1 cfg=[0-9a-f]{8}$/);
+    expect(files[5].content.split('\n')[0]).toMatch(/^<!-- exp=2 cfg=[0-9a-f]{8} -->$/);
+    expect(files[3].content.match(/<polyline /g)).toHaveLength(2);
   });
 });

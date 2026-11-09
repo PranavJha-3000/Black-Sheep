@@ -138,10 +138,11 @@ export function toCsv(rows: StudyRow[]): string {
 
 const f2 = (x: number) => x.toFixed(2);
 const f4 = (x: number) => x.toFixed(4);
-const texEsc = (s: string) => s.replace(/[\\&%$#_{}]/g, (c) => (c === '\\' ? '\\textbackslash{}' : `\\${c}`));
+const TEX_SPECIAL: Record<string, string> = { '\\': '\\textbackslash{}', '^': '\\textasciicircum{}', '~': '\\textasciitilde{}' };
+const texEsc = (s: string) => s.replace(/[\\&%$#_{}^~]/g, (c) => TEX_SPECIAL[c] ?? `\\${c}`);
 
 export function texTable(contrasts: Contrast[], caption: string, label: string, tag: string): string {
-  const body = contrasts.map((c) => `${texEsc(c.arm)} & ${c.n} & ${f2(c.meanDiff)} & [${f2(c.ci[0])}, ${f2(c.ci[1])}] & ${f4(c.pSign)} & ${f4(c.pHolm)} \\\\`);
+  const body = contrasts.map((c) => `${texEsc(c.arm)} & ${c.n} & ${f2(c.meanDiff)} & ${c.n < 2 ? '—' : `[${f2(c.ci[0])}, ${f2(c.ci[1])}]`} & ${f4(c.pSign)} & ${f4(c.pHolm)} \\\\`);
   return [
     `% ${tag}`,
     '\\begin{table}[ht]',
@@ -220,4 +221,44 @@ export function svgReturnSeries(series: { label: string; points: number[] }[], t
     '</svg>',
     '',
   ].join('\n');
+}
+
+type StoredExperiment = { id: number; name: string; resultJson: unknown; specJson: unknown };
+
+/** Every file the paper needs (path relative to the repo root), built from finished `study:*` experiments. */
+export function buildPaperFiles(experiments: StoredExperiment[]): { path: string; content: string }[] {
+  const rows = studyRows(experiments);
+  const files = [{ path: 'paper/data/study.csv', content: toCsv(rows) }];
+  for (const h of [...new Set(rows.map((r) => r.hypothesis))].sort()) {
+    const mine = experiments.filter((e) => e.name.startsWith(`study:${h}:`) && rows.some((r) => r.experimentId === e.id));
+    const tag = `exp=${mine.map((e) => e.id).join(',')} cfg=${[...new Set(rows.filter((r) => r.hypothesis === h).map((r) => r.configHash))].join(',')}`;
+    // The baseline is the first arm of the spec (existing convention).
+    const baseline = expandArms(parse<ExperimentSpec>(mine[0].specJson)!)[0].label;
+    const contrasts = pairedContrasts(rows, h, baseline);
+    files.push({ path: `paper/tables/${h}.tex`, content: texTable(contrasts, `${h}: return difference vs ${baseline}`, `tab:${h}`, tag) });
+    files.push({ path: `paper/figures/${h}-forest.svg`, content: svgForest(contrasts, `${h}: return difference vs ${baseline} (pp)`, tag) });
+    if (h === 'H1') files.push({ path: 'paper/figures/H1-returns.svg', content: svgReturnSeries(meanNavSeries(mine, rows), 'H1: mean NAV per arm', tag) });
+  }
+  return files;
+}
+
+/** Mean downsampled NAV path per arm over subject-fund runs. shortcut: assumes equal-length navs within an arm, as the runner stores. */
+function meanNavSeries(experiments: StoredExperiment[], rows: StudyRow[]): { label: string; points: number[] }[] {
+  const sums = new Map<string, { sum: number[]; n: number }>();
+  for (const e of experiments) {
+    const subjects = new Set(rows.filter((r) => r.experimentId === e.id).map((r) => r.fundKey));
+    for (const arm of parse<ExperimentResult>(e.resultJson)?.runs ?? []) {
+      const acc = sums.get(arm.label) ?? { sum: [], n: 0 };
+      for (const run of arm.runs ?? []) {
+        for (const f of subjects) {
+          const nav = run.navs?.[f];
+          if (!nav) continue;
+          nav.forEach((v, j) => (acc.sum[j] = (acc.sum[j] ?? 0) + v));
+          acc.n++;
+        }
+      }
+      sums.set(arm.label, acc);
+    }
+  }
+  return [...sums].filter(([, a]) => a.n > 0).map(([label, a]) => ({ label, points: a.sum.map((v) => v / a.n) }));
 }
