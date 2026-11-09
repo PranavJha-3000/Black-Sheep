@@ -10,6 +10,7 @@
 | `packages/engine/src/funds.ts`, `policies.ts` | Typed `FundProfile` view of the registry; per-personality deterministic fallback policies and `enforceRiskLimit` | config |
 | `packages/engine/src/metrics.ts`, `director.ts` | Pure evaluation metrics (series, concentration, events) and the World Director (public observation, rule policy, intervention validation, engine-built events) | config, engine types |
 | `packages/engine/src/experiment.ts` | Pure controlled experiment worlds: `simulateWorld` (the live tick's engine calls, synchronous, policy brains), one-variable arm expansion, manifest hashes, paired cross-seed comparison | engine, config |
+| `packages/engine/src/stats.ts` | Pure experiment statistics: seeded percentile bootstrap CI of the mean, exact sign test, Holm correction (D-040) | engine market (PRNG) |
 | `server/db.ts` | PrismaClient singleton | @prisma/client |
 | `server/auth.ts` | Register/login (bcrypt, JWT), `requireAuth` middleware, `wrap()` async guard. Still mounted; the observer client no longer uses accounts | db |
 | `server/worldCore.ts` | PURE world rules, no I/O: DB-row → engine shapes, `resolveWorldSeed`, `parseWorldSnapshot`, `addMissingCompanies`, `missingRegistryFunds`, `shouldFundDecide` (per-fund cadence/offset), `buildWorldStatePayload` (the public payload and its `WorldStatePayload` type) | engine |
@@ -19,12 +20,13 @@
 | `server/providers/jev.ts` | Director mode resolution and the Jev adapter — a DISABLED STUB (no network call) until Jev's API contract is supplied | engine director types |
 | `server/analyticsCore.ts` | PURE builder for the ANALYTICS payload (per-fund financial + AI-systems metrics, world, Director, limitations) | engine metrics |
 | `server/labCore.ts` | PURE lab rules: experiment request validation, admin-token check, running a spec into its result, list/detail payloads | engine experiment |
-| `server/experiments.ts` | The experiment runner: one queued experiment at a time, yielding between runs, re-queue on restart. Never touches the live world | db, labCore |
-| `server/labRoutes.ts` | `GET /lab/experiments`, `GET /lab/experiments/:id` (public), `POST /lab/experiments` (LAB_ADMIN_TOKEN) | db, labCore |
+| `server/labBrain.ts` | Model-backed experiment brains: `makeExperimentDecide` (live-world gate, prompts and tool loop, fallback to policy), per-experiment budget reservation (`BudgetExhausted`), worst-case `estimateExperimentCostUsd` (D-038, D-039) | engine experiment/policies/fundTools, budget, providers/anthropic |
+| `server/experiments.ts` | The experiment runner: one queued experiment at a time, yielding between runs, buffers every decision into `ExperimentDecision` (one batch per run), re-queues policy-only runs on restart and fails model-backed ones (D-039). Never touches the live world | db, labCore, labBrain |
+| `server/labRoutes.ts` | `GET /lab/experiments`, `GET /lab/experiments/:id`, `GET /lab/experiments/:id/runs/:arm/:seed` (public replay), `POST /lab/experiments` (LAB_ADMIN_TOKEN; `?dryRun=1` returns the worst-case estimate) | db, labCore |
 | `server/observerCore.ts` | PURE builders for the investigation payloads: per-fund decision traces (model call + tool calls + memory) and the activity feed | engine types, worldCore types |
 | `server/worldRoutes.ts` | `GET /world/state`, `GET /world/funds/:id/trace`, `GET /world/activity`, `GET /world/analytics` — public, no auth, read-only | db, world, worldCore |
 | `server/index.ts` | Express app, routes (`/auth`, `/world`), error handler, world clock start | all server modules |
-| `prisma/schema.prisma` | Postgres schema: User, World, Fund, Position, MarketTick, MarketEventLog, RivalDecisionLog (+ source/model/llmCallId), LiquidationLog, LlmCallLog, ToolCallLog, AgentMemory, FundNavSnapshot, DirectorDecisionLog, Experiment. Init migration in `prisma/migrations/20261102000000_init` | @prisma/client |
+| `prisma/schema.prisma` | Postgres schema: User, World, Fund, Position, MarketTick, MarketEventLog, RivalDecisionLog (+ source/model/llmCallId), LiquidationLog, LlmCallLog, ToolCallLog, AgentMemory, FundNavSnapshot, DirectorDecisionLog, Experiment (+ `costUsd`, `hasModelBrains`), ExperimentDecision (one row per decision of every experiment run, cascade-deleted with its experiment). Init migration in `prisma/migrations/20261102000000_init` | @prisma/client |
 | `src/store/gameStore.ts` | Read-only zustand projection of public `GET /world/state` (polled every 2.5s); focuses the lowest-id fund and summarises every fund (`funds`) for `FundsStrip`; no auth, lobby, local simulation or trading | engine, server API |
 | `src/components/*` | Terminal UI (Hero, Mid, RivalPanel = FUND INTEL, FundSummaryPanel, PositionRow…). `App` renders only `<Terminal/>` | gameStore |
 | `scripts/verify-backend.ps1` | One-command backend acceptance test (db → migrate → server → unattended tick growth) | docker, prisma, server |
@@ -37,7 +39,7 @@
 - **Fund.liquidated**: boolean set server-authoritatively when `checkLiquidation` flags a margin breach. The fund stays visible to observers (`LIQUIDATED — cause` in FundSummaryPanel) and stops deciding (D-019).
 - **World process:** one in-memory `World` — the persisted `World` row named `live` (market + scheduler + one `Agent` per registry fund). The loop mutates memory, persists snapshots/logs/decision deltas; a restart rebuilds from the latest snapshot (corrupt → throws) + Fund/Position rows + last RivalDecisionLog entry, keeping the persisted seed (D-018).
 - **World Director (D-029):** runs in the tick under the lock, sees only public conditions, can only fire validated catalog sector/macro events; every cycle is a `DirectorDecisionLog` row.
-- **Experiment worlds (D-032):** independent pure simulations run by `server/experiments.ts`; they share no state, lock or tables with the live world.
+- **Experiment worlds (D-032):** independent pure simulations run by `server/experiments.ts`; they share no state, lock or tables with the live world. Model-backed arms (D-038) call the provider through the injected `DecideFn`, outside any world lock, against one hard per-experiment budget (D-039); every decision is persisted to `ExperimentDecision` for replay and export.
 - **Secrets:** `ANTHROPIC_API_KEY` and `JWT_SECRET` live in `.env`, read server-side only. Only the server calls the LLM provider (the Vite browser proxy was removed in Stage 1).
 
 ## Boundaries
