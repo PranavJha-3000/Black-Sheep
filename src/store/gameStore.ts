@@ -49,6 +49,8 @@ export interface GameStoreState {
   openExperiment: (id: number) => void;
   /** POST a new experiment. The admin token is used for this request only and never stored. */
   createExperiment: (body: unknown, token: string) => Promise<{ ok: true; id: number } | { ok: false; error: string }>;
+  /** Server-side dry run: validates the request and returns its worst-case model spend; queues nothing. */
+  estimateExperiment: (body: unknown, token: string) => Promise<{ ok: true; estimateUsd: number } | { ok: false; error: string }>;
   /** The focus fund's DB id (lowest id in the world). Null before a fund exists. */
   fundId: number | null;
   /** The focus fund's display name. */
@@ -111,7 +113,7 @@ const SEED_FUND = createFund(STARTING_CAPITAL, 0);
 
 type SeedState = Omit<
   GameStoreState,
-  'reset' | 'selectTicker' | 'poll' | 'selectedTicker' | 'view' | 'selectedFundId' | 'trace' | 'activity' | 'analytics' | 'setView' | 'openFund' | 'lab' | 'selectedExperimentId' | 'openExperiment' | 'createExperiment'
+  'reset' | 'selectTicker' | 'poll' | 'selectedTicker' | 'view' | 'selectedFundId' | 'trace' | 'activity' | 'analytics' | 'setView' | 'openFund' | 'lab' | 'selectedExperimentId' | 'openExperiment' | 'createExperiment' | 'estimateExperiment'
 >;
 
 function seedState(): SeedState {
@@ -192,6 +194,14 @@ export const useGameStore = create<GameStoreState>((set, get) => ({
       const { id } = await apiFetch<{ id: number }>('/lab/experiments', { method: 'POST', body, token });
       get().openExperiment(id);
       return { ok: true as const, id };
+    } catch (err) {
+      return { ok: false as const, error: err instanceof Error ? err.message : String(err) };
+    }
+  },
+  estimateExperiment: async (body: unknown, token: string) => {
+    try {
+      const { estimateUsd } = await apiFetch<{ estimateUsd: number }>('/lab/experiments?dryRun=1', { method: 'POST', body, token });
+      return { ok: true as const, estimateUsd };
     } catch (err) {
       return { ok: false as const, error: err instanceof Error ? err.message : String(err) };
     }

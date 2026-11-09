@@ -1,13 +1,24 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { FUND_PROFILES } from '@black-sheep/engine/funds';
 import type { ExperimentVariable } from '@black-sheep/engine/experiment';
 import { useGameStore } from '../store/gameStore';
 import type { ExperimentDetail } from '../../server/labCore';
-import { EXPERIMENT_MAX_SEEDS, EXPERIMENT_MAX_TICKS } from '../../config/game';
+import { EXPERIMENT_MAX_BUDGET_USD, EXPERIMENT_MAX_SEEDS, EXPERIMENT_MAX_TICKS } from '../../config/game';
+import { MODEL_REGISTRY } from '../../config/models';
 import { cx, fmtNum, sparkPath } from './fmt';
 
 const pct = (n: number | null, dp = 1) => (n === null ? '—' : `${(n * 100).toFixed(dp)}%`);
-const signedPct = (n: number, dp = 2) => `${n >= 0 ? '+' : ''}${(n * 100).toFixed(dp)}%`;
+const signed = (n: number, dp: number) => `${n >= 0 ? '+' : '−'}${Math.abs(n * 100).toFixed(dp)}`;
+/** `+1.2% [−0.4, +2.8]`; a missing mean or interval renders as an em dash. */
+const fmtCI = (mean: number | null, ci: [number, number] | null) =>
+  mean === null ? '—' : `${signed(mean, 1)}%${ci ? ` [${signed(ci[0], 1)}, ${signed(ci[1], 1)}]` : ''}`;
+const fmtP = (p: number | null | undefined) => (p == null ? '—' : p.toPrecision(3));
+const usd = (n: number) => `$${n.toFixed(2)}`;
+const BRAIN_OPTIONS: { value: string; label: string }[] = [
+  { value: 'policy', label: 'Policy' },
+  ...Object.entries(MODEL_REGISTRY).map(([id, m]) => ({ value: id, label: m.displayName })),
+];
+const brainLabel = (b: string) => BRAIN_OPTIONS.find((o) => o.value === b)?.label ?? b;
 const FUND_NAME: Record<string, string> = Object.fromEntries(FUND_PROFILES.map((p) => [p.key, p.name]));
 const STATUS_STYLE: Record<string, string> = {
   queued: 'text-terminal-dim',
@@ -83,7 +94,7 @@ export default function ResearchLabView() {
           <Section title="Research Lab">
             <p className="max-w-[72ch] text-[14px] leading-relaxed text-terminal-soft">
               Controlled experiment worlds (VISION Mode B): each experiment varies one variable across arms and runs every arm on the same
-              seeds, independent of the live world. Funds trade on their deterministic policies — no model calls, no spend. Pick an
+              seeds, independent of the live world. Funds trade on their deterministic policies unless given a model brain, which needs a server key and a budget. Pick an
               experiment, or create one with New experiment and the lab admin token.
             </p>
           </Section>
@@ -101,6 +112,9 @@ export default function ResearchLabView() {
 
 function ExperimentResultView({ d }: { d: ExperimentDetail }) {
   const r = d.result;
+  // One y-domain over every arm so the NAV charts are comparable by eye.
+  const allNavs = r?.series.flatMap((a) => a.funds.flatMap((f) => f.navs)) ?? [];
+  const domain: [number, number] | undefined = allNavs.length ? [Math.min(...allNavs), Math.max(...allNavs)] : undefined;
   return (
     <>
       <Section title={`Experiment #${d.id}`} right={<span className={cx('text-[12px] font-medium capitalize', STATUS_STYLE[d.status])}>{d.status}</span>}>
@@ -125,7 +139,21 @@ function ExperimentResultView({ d }: { d: ExperimentDetail }) {
             {d.manifest ? Object.entries(d.manifest.fundProfileHashes).map(([k, h]) => `${k} ${h}`).join(' · ') : '—'}
           </dd>
           <dt className="text-terminal-dim">Brains</dt>
-          <dd>Deterministic policies only (no model calls)</dd>
+          <dd>
+            {Object.keys(d.spec?.base.brains ?? {}).length > 0
+              ? Object.entries(d.spec?.base.brains ?? {}).map(([k, b]) => `${FUND_NAME[k] ?? k}: ${brainLabel(b)}`).join(' · ')
+              : 'Deterministic policies'}
+            {d.spec?.variable === 'brains' && ' (varied across arms)'}
+          </dd>
+          {r && (
+            <>
+              <dt className="text-terminal-dim">Model spend</dt>
+              <dd>
+                {usd(r.costUsd)} of {usd(r.estimateUsd)} worst-case estimate
+                {d.spec?.budgetUsd != null && ` · budget ${usd(d.spec.budgetUsd)}`}
+              </dd>
+            </>
+          )}
         </dl>
         {d.error && <div className="mt-2 text-[11px] text-terminal-red">Failed: {d.error}</div>}
       </Section>
@@ -143,7 +171,7 @@ function ExperimentResultView({ d }: { d: ExperimentDetail }) {
               <table className="data-table w-full text-[13px]">
                 <thead>
                   <tr>
-                    {['Arm', 'Fund', 'n', 'Return (mean ± sd)', 'Max DD', 'Sharpe', 'Survival', 'Δ vs baseline', 'Wins'].map((h) => (
+                    {['Arm', 'Fund', 'n', 'Return mean [95% CI]', 'Max DD', 'Sharpe', 'Δ vs baseline [95% CI]', 'Wins', 'p (Holm)', 'Survival', 'Fallback rate', 'Cost / run'].map((h) => (
                       <th key={h}>{h}</th>
                     ))}
                   </tr>
@@ -156,17 +184,19 @@ function ExperimentResultView({ d }: { d: ExperimentDetail }) {
                         <td className="font-semibold">{f.name}</td>
                         <td>{f.n}</td>
                         <td className={cx(f.totalReturn.mean !== null && (f.totalReturn.mean >= 0 ? 'text-terminal-green' : 'text-terminal-red'))}>
-                          {pct(f.totalReturn.mean, 2)}
-                          {f.totalReturn.std !== null && <span className="text-terminal-dim"> ± {pct(f.totalReturn.std, 2)}</span>}
+                          {fmtCI(f.totalReturn.mean, f.totalReturnCI)}
                         </td>
                         <td>{pct(f.maxDrawdown.mean)}</td>
                         <td>{f.sharpe.mean === null ? '—' : fmtNum(f.sharpe.mean, 3)}</td>
-                        <td className={cx(f.survival < 1 && 'text-terminal-red')}>{pct(f.survival, 0)}</td>
                         <td>
-                          {f.vsBaseline ? signedPct(f.vsBaseline.meanDiff) : <span className="text-terminal-dim">baseline</span>}
+                          {f.vsBaseline ? fmtCI(f.vsBaseline.meanDiff, f.vsBaseline.ci) : <span className="text-terminal-dim">baseline</span>}
                           {f.baselineLabel && <span className="block text-[10px] text-terminal-dim">vs {f.baselineLabel}</span>}
                         </td>
                         <td>{f.vsBaseline ? `${f.vsBaseline.wins}/${f.vsBaseline.pairs}` : '—'}</td>
+                        <td>{fmtP(f.vsBaseline?.pHolm)}</td>
+                        <td className={cx(f.survival < 1 && 'text-terminal-red')}>{pct(f.survival, 0)}</td>
+                        <td>{fi === 0 ? pct(arm.fallbackRate, 0) : ''}</td>
+                        <td>{fi === 0 ? usd(arm.meanCostUsd) : ''}</td>
                       </tr>
                     )),
                   )}
@@ -189,7 +219,7 @@ function ExperimentResultView({ d }: { d: ExperimentDetail }) {
                   <div className="mb-2 text-[12px] font-medium text-terminal-soft">{arm.label}</div>
                   <svg viewBox="0 0 300 80" className="h-24 w-full rounded-xl bg-black/30" role="img" aria-label={`NAV of each fund in ${arm.label}`}>
                     {arm.funds.map((f, i) => (
-                      <path key={f.key} d={sparkPath(f.navs, 300, 80)} fill="none" stroke={SERIES_COLORS[i % SERIES_COLORS.length]} strokeWidth="1.5" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
+                      <path key={f.key} d={sparkPath(f.navs, 300, 80, 2, domain)} fill="none" stroke={SERIES_COLORS[i % SERIES_COLORS.length]} strokeWidth="1.5" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
                     ))}
                   </svg>
                   <div className="mt-2 flex flex-wrap gap-x-4 text-[11px]">
@@ -200,7 +230,7 @@ function ExperimentResultView({ d }: { d: ExperimentDetail }) {
                 </div>
               ))}
             </div>
-            <div className="mt-1 text-[10px] text-terminal-dim">Each line is scaled to its own range.</div>
+            <div className="mt-1 text-[10px] text-terminal-dim">All charts share one y-axis{domain ? `: ${fmtNum(domain[0], 0)} – ${fmtNum(domain[1], 0)}` : ''}.</div>
           </Section>
 
           <Section title="Runs (reproducibility)">
@@ -221,8 +251,8 @@ function ExperimentResultView({ d }: { d: ExperimentDetail }) {
 
           <Section title="Limitations">
             <ul className="list-disc space-y-1.5 pl-5 text-[13px] leading-relaxed text-terminal-dim">
-              <li>n = number of seeds. Mean ± sample standard deviation; Δ is paired by seed against the fund's baseline — the first arm that contains it. This is not a significance test.</li>
-              <li>Policy-only worlds: funds use their deterministic policies, so these results compare rules and world settings, not language models.</li>
+              <li>n = number of seeds. Intervals are bootstrap 95% CIs of the mean over seeds; Δ is paired by seed against the fund's baseline — the first arm that contains it. p is a sign test on those paired differences, Holm-corrected across the comparisons in this experiment.</li>
+              <li>Funds without a model brain use their deterministic policies. Fallback rate is the share of model decisions that fell back to the policy; cost is mean model spend per run.</li>
               <li>Sharpe and drawdown are per NAV snapshot (every 3 ticks) and not annualised.</li>
               <li>A run is reproducible from its seed and configuration: rerunning it must give the same digest.</li>
             </ul>
@@ -237,10 +267,12 @@ const VARIABLES: { value: ExperimentVariable; label: string }[] = [
   { value: 'directorMode', label: 'World Director (none vs rule)' },
   { value: 'funds', label: 'Fund roster (each fund alone vs all)' },
   { value: 'decisionEveryTicks', label: 'Decision cadence (ticks)' },
+  { value: 'brains', label: 'Brain (one fund: policy vs models)' },
 ];
 
 function CreateExperiment({ onDone }: { onDone: () => void }) {
   const createExperiment = useGameStore((s) => s.createExperiment);
+  const estimateExperiment = useGameStore((s) => s.estimateExperiment);
   const [name, setName] = useState('');
   const [variable, setVariable] = useState<ExperimentVariable>('directorMode');
   const [funds, setFunds] = useState<string[]>(FUND_PROFILES.map((p) => p.key));
@@ -250,6 +282,12 @@ function CreateExperiment({ onDone }: { onDone: () => void }) {
   const [seedCount, setSeedCount] = useState(5);
   const [firstSeed, setFirstSeed] = useState(1);
   const [token, setToken] = useState('');
+  const [baseBrains, setBaseBrains] = useState<Record<string, string>>({});
+  const [budget, setBudget] = useState(5);
+  // For variable = brains: the fund under test and which brains become arms (one arm per brain).
+  const [subject, setSubject] = useState(FUND_PROFILES[0]!.key);
+  const [armBrains, setArmBrains] = useState<string[]>(['policy', 'claude-haiku-5-5']);
+  const [estimate, setEstimate] = useState<{ ok: true; estimateUsd: number } | { ok: false; error: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -257,6 +295,7 @@ function CreateExperiment({ onDone }: { onDone: () => void }) {
     if (variable === 'directorMode') return ['none', 'rule'];
     // Each fund alone, then the whole roster: a "mixed world" against single-fund worlds.
     if (variable === 'funds') return [...funds.map((k) => [k]), funds];
+    if (variable === 'brains') return armBrains.map((b) => ({ [subject]: b }));
     return cadenceValues
       .split(',')
       .map((v) => v.trim())
@@ -264,16 +303,35 @@ function CreateExperiment({ onDone }: { onDone: () => void }) {
       .map((v) => (v === 'registry' ? null : Number(v)));
   };
 
+  const usesModel = Object.entries(baseBrains).some(([k, b]) => funds.includes(k) && b !== 'policy') || (variable === 'brains' && armBrains.some((b) => b !== 'policy'));
+  const buildBody = () => ({
+    name,
+    variable,
+    values: values(),
+    base: { funds, directorMode, decisionEveryTicks: null, ticks, brains: Object.fromEntries(Object.entries(baseBrains).filter(([k]) => funds.includes(k))) },
+    seeds: Array.from({ length: seedCount }, (_, i) => firstSeed + i),
+    ...(usesModel ? { budgetUsd: budget } : {}),
+  });
+
+  // Live worst-case estimate from the server's dry run (never duplicated client-side); needs the token.
+  const bodyKey = JSON.stringify(buildBody());
+  useEffect(() => {
+    if (!usesModel || token.length === 0) {
+      setEstimate(null);
+      return;
+    }
+    let stale = false;
+    const t = setTimeout(() => void estimateExperiment(JSON.parse(bodyKey), token).then((r) => !stale && setEstimate(r)), 400);
+    return () => {
+      stale = true;
+      clearTimeout(t);
+    };
+  }, [bodyKey, token, usesModel, estimateExperiment]);
+
   const submit = async () => {
     setBusy(true);
     setError(null);
-    const body = {
-      name,
-      variable,
-      values: values(),
-      base: { funds, directorMode, decisionEveryTicks: null, ticks },
-      seeds: Array.from({ length: seedCount }, (_, i) => firstSeed + i),
-    };
+    const body = buildBody();
     const r = await createExperiment(body, token);
     setBusy(false);
     if (r.ok) onDone();
@@ -319,6 +377,27 @@ function CreateExperiment({ onDone }: { onDone: () => void }) {
               </select>
             </label>
           )}
+          {variable === 'brains' && (
+            <div className="space-y-2">
+              <label className="block space-y-1">
+                <span className="text-terminal-dim">Fund under test</span>
+                <select className={input} value={subject} onChange={(e) => setSubject(e.target.value)}>
+                  {FUND_PROFILES.map((p) => (
+                    <option key={p.key} value={p.key}>{p.name}</option>
+                  ))}
+                </select>
+              </label>
+              <fieldset className="space-y-1">
+                <legend className="text-terminal-dim">Brains (one arm each)</legend>
+                {BRAIN_OPTIONS.map((o) => (
+                  <label key={o.value} className="flex items-center gap-2">
+                    <input type="checkbox" checked={armBrains.includes(o.value)} onChange={(e) => setArmBrains((bs) => (e.target.checked ? [...bs, o.value] : bs.filter((b) => b !== o.value)))} />
+                    {o.label}
+                  </label>
+                ))}
+              </fieldset>
+            </div>
+          )}
           {variable === 'decisionEveryTicks' && (
             <label className="block space-y-1">
               <span className="text-terminal-dim">Cadence values (comma-separated; "registry" = each fund's own)</span>
@@ -326,9 +405,48 @@ function CreateExperiment({ onDone }: { onDone: () => void }) {
             </label>
           )}
           <div className="text-terminal-dim">
-            Arms: {values().map((v) => (Array.isArray(v) ? v.map((k) => FUND_NAME[k] ?? k).join(' + ') : String(v ?? 'registry'))).join(' | ')}
+            Arms:{' '}
+            {values()
+              .map((v) =>
+                Array.isArray(v)
+                  ? v.map((k) => FUND_NAME[k] ?? k).join(' + ')
+                  : v && typeof v === 'object'
+                    ? Object.values(v).map((b) => brainLabel(String(b))).join('')
+                    : String(v ?? 'registry'),
+              )
+              .join(' | ')}
           </div>
         </div>
+        <fieldset className="space-y-1">
+          <legend className="text-terminal-dim">Brain per fund (base)</legend>
+          {FUND_PROFILES.filter((p) => funds.includes(p.key)).map((p) => (
+            <label key={p.key} className="flex items-center justify-between gap-2">
+              {p.name}
+              <select className={`${input} !w-auto`} aria-label={`Brain for ${p.name}`} value={baseBrains[p.key] ?? 'policy'} onChange={(e) => setBaseBrains((b) => ({ ...b, [p.key]: e.target.value }))}>
+                {BRAIN_OPTIONS.map((o) => (
+                  <option key={o.value} value={o.value}>{o.label}</option>
+                ))}
+              </select>
+            </label>
+          ))}
+        </fieldset>
+        {usesModel && (
+          <div className="space-y-1">
+            <label className="block space-y-1">
+              <span className="text-terminal-dim">Budget (USD, max {EXPERIMENT_MAX_BUDGET_USD})</span>
+              <input className={input} type="number" min={0.01} max={EXPERIMENT_MAX_BUDGET_USD} step={0.5} value={budget} onChange={(e) => setBudget(Number(e.target.value))} />
+            </label>
+            <div className={estimate && !estimate.ok ? 'text-terminal-red' : 'text-terminal-dim'} role="status">
+              {token.length === 0
+                ? 'Enter the admin token to see the worst-case estimate.'
+                : !estimate
+                  ? 'Estimating…'
+                  : estimate.ok
+                    ? `Worst-case model spend: ${usd(estimate.estimateUsd)}${estimate.estimateUsd > budget ? ` (above budget; the run stops at ${usd(budget)})` : ''}`
+                    : estimate.error}
+            </div>
+          </div>
+        )}
         <label className="space-y-1">
           <span className="text-terminal-dim">Ticks per run (max {EXPERIMENT_MAX_TICKS})</span>
           <input className={input} type="number" min={10} max={EXPERIMENT_MAX_TICKS} value={ticks} onChange={(e) => setTicks(Number(e.target.value))} />

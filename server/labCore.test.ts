@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { buildExperimentDetail, buildExperimentSummary, buildRunReplay, navTickAxis, checkLabToken, decisionFromRow, parseExperimentRequest, runExperimentSpec, type ExperimentRow } from './labCore';
+import { buildExperimentDetail, buildExperimentSummary, buildRunReplay, navTickAxis, checkLabToken, decisionFromRow, dryRunExperiment, parseExperimentRequest, runExperimentSpec, type ExperimentRow } from './labCore';
 import { downsample, simulateWorld } from '@black-sheep/engine/experiment';
 import { EXPERIMENT_SERIES_POINTS, SNAPSHOT_EVERY_TICKS } from '../config/game';
 import { BudgetExhausted } from './labBrain';
@@ -283,5 +283,19 @@ describe('navTickAxis', () => {
       expect(d).toHaveLength(t.length);
       d.forEach((v, i) => expect(v).toBe(f.navs[t[i] / S - 1]));
     }
+  });
+});
+
+describe('dryRunExperiment', () => {
+  const modelBody = () =>
+    body({ base: { funds: ALL, directorMode: 'rule', decisionEveryTicks: null, ticks: 200, brains: { 'crown-meridian': 'claude-haiku-5-5' } }, budgetUsd: 5 });
+
+  it('dry run validates and does not store', () => {
+    // Pure: it only returns a number, so there is nothing to store; the route is a thin wrapper.
+    const ok = dryRunExperiment(modelBody(), KEYED);
+    expect(ok.ok && ok.estimateUsd).toBeGreaterThan(0);
+    expect(dryRunExperiment(body(), KEYED)).toEqual({ ok: true, estimateUsd: 0 });
+    expect(dryRunExperiment(modelBody(), { providerConfigured: false })).toEqual({ ok: false, error: 'Model brains need a provider key on the server.' });
+    expect(dryRunExperiment(body({ name: '' }), KEYED).ok).toBe(false);
   });
 });

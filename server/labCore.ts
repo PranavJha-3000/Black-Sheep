@@ -166,6 +166,15 @@ export function parseExperimentRequest(
   return { ok: true, spec };
 }
 
+/** Validate a create request and price it (worst case) without storing anything: the form's live estimate. */
+export function dryRunExperiment(
+  body: unknown,
+  opts: { providerConfigured: boolean },
+): { ok: true; estimateUsd: number } | { ok: false; error: string } {
+  const parsed = parseExperimentRequest(body, opts);
+  return parsed.ok ? { ok: true, estimateUsd: estimateExperimentCostUsd(parsed.spec) } : parsed;
+}
+
 const digest = (s: string) => createHash('sha256').update(s).digest();
 
 /**
