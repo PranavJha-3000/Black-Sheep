@@ -1,50 +1,10 @@
 import { useMemo } from 'react';
-import { FUND_PROFILES } from '@black-sheep/engine/funds';
-import { expandArms } from '@black-sheep/engine/experiment';
 import { CHRONICLE_MAX_EXPERIMENTS, useGameStore } from '../store/gameStore';
 import type { LeaderboardRow } from '../../server/leaderboardCore';
-import type { ExperimentDetail } from '../../server/labCore';
-import { STARTING_CAPITAL } from '../../config/game';
+import { cardsOf } from './chronicle';
 import { cx } from './fmt';
 
-const FUND_NAME: Record<string, string> = Object.fromEntries(FUND_PROFILES.map((p) => [p.key, p.name]));
-const fundName = (k: string) => (FUND_NAME[k] ?? k).toUpperCase();
 const signed = (n: number, dp = 1) => `${n >= 0 ? '+' : '−'}${Math.abs(n * 100).toFixed(dp)}%`;
-
-interface Card {
-  experimentId: number;
-  experiment: string;
-  arm: string;
-  seed: number;
-  date: string;
-  brains: string;
-  outcome: { text: string; tone: 'good' | 'bad' }[];
-  costUsd: number;
-}
-
-/** One card per run of a done experiment. Pure: a run's outcome comes from its last NAV and its liquidated list. */
-function cardsOf(d: ExperimentDetail): Card[] {
-  if (!d.result) return [];
-  const arms = d.spec ? expandArms(d.spec) : [];
-  return d.result.runs.flatMap((arm, i) => {
-    const b = arms[i]?.config.brains ?? {};
-    const brains = Object.entries(b).map(([k, v]) => `${fundName(k)}: ${v}`).join(' · ') || 'policies';
-    return arm.runs.map((run): Card => {
-      const rets = Object.entries(run.navs)
-        .filter(([, n]) => n.length)
-        .map(([k, n]) => ({ k, r: n[n.length - 1] / STARTING_CAPITAL - 1 }))
-        .sort((x, y) => y.r - x.r);
-      const outcome: Card['outcome'] = [];
-      if (rets.length) {
-        const best = rets[0], worst = rets[rets.length - 1];
-        outcome.push({ text: `${fundName(best.k)} ${signed(best.r)}`, tone: best.r >= 0 ? 'good' : 'bad' });
-        if (rets.length > 1) outcome.push({ text: `${fundName(worst.k)} ${signed(worst.r)}`, tone: worst.r >= 0 ? 'good' : 'bad' });
-      }
-      for (const k of run.liquidated) outcome.push({ text: `${fundName(k)} liquidated`, tone: 'bad' });
-      return { experimentId: d.id, experiment: d.name, arm: arm.label, seed: run.seed, date: (d.finishedAt ?? d.createdAt).slice(0, 10), brains, outcome, costUsd: run.costUsd };
-    });
-  });
-}
 
 /** Leaderboard CI bars share one horizontal axis that always includes 0. */
 function Leaderboard({ rows }: { rows: LeaderboardRow[] }) {
@@ -106,6 +66,7 @@ function Leaderboard({ rows }: { rows: LeaderboardRow[] }) {
 export default function TimelineView() {
   const board = useGameStore((s) => s.chronicle.board);
   const list = useGameStore((s) => s.chronicle.list);
+  const failed = useGameStore((s) => s.chronicle.failed);
   const details = useGameStore((s) => s.chronicle.details);
   const selected = useGameStore((s) => s.selectedRun);
   const selectRun = useGameStore((s) => s.selectRun);
@@ -127,7 +88,7 @@ export default function TimelineView() {
           {capped && <span className="text-[12px] text-terminal-dim">Showing runs from the {CHRONICLE_MAX_EXPERIMENTS} newest experiments</span>}
         </div>
         {!list ? (
-          <div className="p-4 text-center text-[13px] text-terminal-dim">Loading chronicles…</div>
+          <div className="p-4 text-center text-[13px] text-terminal-dim">{failed ? 'Could not load chronicles — retrying.' : 'Loading chronicles…'}</div>
         ) : cards.length === 0 ? (
           <div className="p-4 text-center text-[13px] text-terminal-dim">No recorded runs yet — finish an experiment in Research Lab.</div>
         ) : (

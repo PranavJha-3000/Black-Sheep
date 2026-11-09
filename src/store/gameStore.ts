@@ -57,7 +57,7 @@ export interface GameStoreState {
   /** RESEARCH LAB (fetched only in that view). */
   lab: { list: ExperimentSummary[] | null; detail: ExperimentDetail | null };
   /** TIMELINE archive (fetched only in that view): the leaderboard and done experiments' details by id. */
-  chronicle: { board: LeaderboardRow[] | null; list: ExperimentSummary[] | null; details: Record<number, ExperimentDetail> };
+  chronicle: { board: LeaderboardRow[] | null; list: ExperimentSummary[] | null; details: Record<number, ExperimentDetail>; failed: boolean };
   selectedRun: SelectedRun | null;
   selectRun: (run: SelectedRun | null) => void;
   selectedExperimentId: number | null;
@@ -184,7 +184,7 @@ export const useGameStore = create<GameStoreState>((set, get) => ({
   activity: null,
   analytics: null,
   lab: { list: null, detail: null },
-  chronicle: { board: null, list: null, details: {} },
+  chronicle: { board: null, list: null, details: {}, failed: false },
   selectedRun: null,
   selectedExperimentId: null,
   // ---------------------------------------------------------------------------
@@ -337,5 +337,5 @@ async function fetchChronicle(): Promise<void> {
   const missing = newest.filter((e) => !details[e.id]);
   const fetched = await Promise.all(missing.map((e) => apiFetch<ExperimentDetail>(`/lab/experiments/${e.id}`).catch(() => null)));
   for (const d of fetched) if (d) details[d.id] = d;
-  useGameStore.setState({ chronicle: { board: board?.leaderboard ?? chronicle.board, list: experiments, details } });
+  useGameStore.setState({ chronicle: { board: board?.leaderboard ?? chronicle.board, list: experiments, details, failed: !experiments } });
 }
