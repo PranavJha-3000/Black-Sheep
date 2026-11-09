@@ -1,5 +1,6 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import {
+  armModelFunds,
   canonicalJson,
   compareArms,
   downsample,
@@ -25,13 +26,14 @@ import {
   EXPERIMENT_MAX_TICKS,
   EXPERIMENT_SERIES_POINTS,
 } from '../config/game';
-import { armModelFunds, estimateExperimentCostUsd, makeExperimentDecide, type ExperimentBudget } from './labBrain';
+import { estimateExperimentCostUsd, makeExperimentDecide, type ExperimentBudget } from './labBrain';
 import type { CreateMessage } from './providers/anthropic';
 
 /**
  * labCore — PURE Research Lab rules (VISION §10, D-032, D-033): validate an
  * experiment request, check the admin token, and run an experiment spec into
- * its stored result. No I/O except the injected yield.
+ * its stored result. No I/O except what is injected: the yield, and for model
+ * brains the provider call (`create`) and the decision sink (`onDecision`).
  */
 
 const NAME_MAX = 80;

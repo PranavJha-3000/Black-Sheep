@@ -155,6 +155,7 @@ describe('runExperimentSpec', () => {
     expect(r.estimateUsd).toBeGreaterThan(r.costUsd);
     expect(r.arms[1].fallbackRate).toBe(0);
     // Policy-only arm: no decisions reported, never a model call.
+    expect(seen.length).toBeGreaterThan(0);
     expect(seen.every((s) => s.startsWith('brains=crown-meridian:claude-haiku-5-5:'))).toBe(true);
   });
 

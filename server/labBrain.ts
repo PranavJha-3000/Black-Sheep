@@ -1,6 +1,5 @@
 import { decideByPolicy } from '@black-sheep/engine/policies';
-import { expandArms, type ArmConfig, type DecideFn, type DecisionRecord, type ExperimentSpec } from '@black-sheep/engine/experiment';
-import { getFundProfile } from '@black-sheep/engine/funds';
+import { armModelFunds, expandArms, type DecideFn, type DecisionRecord, type ExperimentSpec } from '@black-sheep/engine/experiment';
 import { runFundTool } from '@black-sheep/engine/fundTools';
 import { buildFundSystemPrompt, buildRivalUserMessage, shouldRivalReconsider } from '@black-sheep/engine/rivalLLM';
 import type { RivalDecisionInput } from '@black-sheep/engine/rival';
@@ -31,16 +30,6 @@ export interface ExperimentBudget {
 
 /** Worst-case cost of one model decision (every round at max_tokens). */
 const callEstimateUsd = (model: ModelId) => estimateCallCostUsd(model, MAX_TOOL_ROUNDS, DECISION_MAX_TOKENS, DECISION_PROMPT_TOKENS_ESTIMATE);
-
-/** Roster funds in this arm that a model decides for, with their effective cadence. */
-export function armModelFunds(arm: ArmConfig): { key: string; model: ModelId; every: number }[] {
-  return arm.funds.flatMap((key) => {
-    const brain = arm.brains?.[key];
-    const profile = getFundProfile(key);
-    if (!brain || brain === 'policy' || !profile) return [];
-    return [{ key, model: brain, every: arm.decisionEveryTicks ?? profile.decisionEveryTicks }];
-  });
-}
 
 /** Worst case for the whole spec: every model fund calls on every decision slot of every run. */
 export function estimateExperimentCostUsd(spec: ExperimentSpec): number {

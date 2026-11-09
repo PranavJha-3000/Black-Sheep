@@ -21,6 +21,8 @@ import { STARTING_CAPITAL } from '../../../config/game';
 
 const ALL = ['sterling-vale', 'halden-whitmore', 'crown-meridian'];
 const base: ArmConfig = { funds: ALL, directorMode: 'rule', decisionEveryTicks: null, ticks: 300 };
+/** configHash of the dir spec below, computed before brains/budget existed (commit 85959d4). */
+const PINNED_POLICY_CONFIG_HASH = '150e137a';
 
 describe('simulateWorld', () => {
   it('is reproducible: the same arm and seed give the same digest and series', () => {
@@ -109,6 +111,24 @@ describe('hashing and manifest', () => {
     expect(Object.keys(m.fundProfileHashes)).toEqual(ALL);
     expect(m.configHash).toBe(experimentManifest({ ...spec }).configHash);
     expect(m.configHash).not.toBe(experimentManifest({ ...spec, seeds: [1, 3] }).configHash);
+  });
+
+  it('a policy-only manifest is byte-identical to the pre-brains shape', () => {
+    const spec: ExperimentSpec = { name: 'dir', base, variable: 'directorMode', values: ['none', 'rule'], seeds: [1, 2] };
+    const m = experimentManifest(spec);
+    expect(JSON.stringify(m)).toBe(
+      JSON.stringify({ configHash: m.configHash, fundProfileHashes: m.fundProfileHashes, worldConstantsHash: m.worldConstantsHash, seeds: [1, 2], engine: 'black-sheep-engine', policyOnly: true }),
+    );
+    // Pinned: brains support must not move a policy-only spec's config hash.
+    expect(m.configHash).toBe(fnv1a(canonicalJson(spec)));
+    expect(m.configHash).toBe(PINNED_POLICY_CONFIG_HASH);
+    // A model brain on a fund outside the roster is still policy-only.
+    expect(experimentManifest({ ...spec, base: { ...base, funds: ['sterling-vale'], brains: { 'crown-meridian': 'claude-haiku-5-5' } } }).policyOnly).toBe(true);
+  });
+
+  it('a spec with a model brain records policyOnly: false', () => {
+    const spec: ExperimentSpec = { name: 'b', base, variable: 'brains', values: [{}, { 'crown-meridian': 'claude-haiku-5-5' }], seeds: [1], budgetUsd: 5 };
+    expect(experimentManifest(spec).policyOnly).toBe(false);
   });
 });
 

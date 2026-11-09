@@ -83,6 +83,16 @@ export function armLabel(variable: ExperimentVariable, value: unknown): string {
   return `${variable}=${String(value)}`;
 }
 
+/** Roster funds in this arm that a model decides for, with their effective cadence. */
+export function armModelFunds(arm: ArmConfig): { key: string; model: ModelId; every: number }[] {
+  return arm.funds.flatMap((key) => {
+    const brain = arm.brains?.[key];
+    const profile = getFundProfile(key);
+    if (!brain || brain === 'policy' || !profile) return [];
+    return [{ key, model: brain, every: arm.decisionEveryTicks ?? profile.decisionEveryTicks }];
+  });
+}
+
 export function expandArms(spec: ExperimentSpec): { label: string; config: ArmConfig }[] {
   return spec.values.map((value) => ({
     label: armLabel(spec.variable, value),
@@ -385,7 +395,8 @@ export interface ExperimentManifest {
   worldConstantsHash: string;
   seeds: number[];
   engine: 'black-sheep-engine';
-  policyOnly: true;
+  /** No arm has a roster fund decided by a model. */
+  policyOnly: boolean;
 }
 
 export function experimentManifest(spec: ExperimentSpec): ExperimentManifest {
@@ -395,7 +406,7 @@ export function experimentManifest(spec: ExperimentSpec): ExperimentManifest {
     worldConstantsHash: fnv1a(canonicalJson({ ...GAME_CONFIG })),
     seeds: spec.seeds,
     engine: 'black-sheep-engine',
-    policyOnly: true,
+    policyOnly: expandArms(spec).every((a) => armModelFunds(a.config).length === 0),
   };
 }
 
