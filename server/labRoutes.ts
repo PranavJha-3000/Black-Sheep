@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { experimentManifest } from '@black-sheep/engine/experiment';
 import { prisma } from './db';
 import { wrap } from './auth';
-import { buildExperimentDetail, buildExperimentSummary, buildRunReplay, checkLabToken, decisionFromRow, parseExperimentRequest } from './labCore';
+import { buildExperimentDetail, buildExperimentSummary, buildRunReplay, checkLabToken, decisionFromRow, findRun, parseExperimentRequest } from './labCore';
 import { EXPERIMENT_REPLAY_MAX_DECISIONS } from '../config/game';
 import { parseFundId } from './observerCore';
 
@@ -48,6 +48,11 @@ labRouter.get(
     const row = id === null || !Number.isInteger(seed) ? null : await prisma.experiment.findUnique({ where: { id } });
     if (!row || row.status !== 'done') {
       res.status(404).json({ error: row ? 'experiment has no finished runs yet' : 'experiment not found' });
+      return;
+    }
+    // Validate the run against the stored result first so an unknown run costs no decision read.
+    if (!findRun(row, req.params.arm, seed)) {
+      res.status(404).json({ error: 'run not found' });
       return;
     }
     // Express already URL-decodes params, so the arm label (e.g. `brains=...`) arrives as stored.

@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
-import { buildExperimentDetail, buildExperimentSummary, buildRunReplay, checkLabToken, decisionFromRow, parseExperimentRequest, runExperimentSpec, type ExperimentRow } from './labCore';
+import { buildExperimentDetail, buildExperimentSummary, buildRunReplay, navTickAxis, checkLabToken, decisionFromRow, parseExperimentRequest, runExperimentSpec, type ExperimentRow } from './labCore';
+import { downsample, simulateWorld } from '@black-sheep/engine/experiment';
+import { EXPERIMENT_SERIES_POINTS, SNAPSHOT_EVERY_TICKS } from '../config/game';
 import { BudgetExhausted } from './labBrain';
 import { estimateCallCostUsd } from './budget';
 import type { CreateMessage } from './providers/anthropic';
@@ -254,5 +256,32 @@ describe('buildRunReplay', () => {
   it('maps a stored row, tolerating bad toolCallsJson', () => {
     expect(rec(4).toolCalls).toEqual([]);
     expect(rec(4).decision).toEqual({ action: 'hold', reasoning: 'r', confidence: 0 });
+  });
+});
+
+describe('navTickAxis', () => {
+  const S = SNAPSHOT_EVERY_TICKS;
+  it('downsampled: one tick per point, increasing multiples of the snapshot spacing, ends at the raw ends', () => {
+    const t = navTickAxis(1500);
+    expect(t).toHaveLength(EXPERIMENT_SERIES_POINTS);
+    expect(t.every((x, i) => x % S === 0 && (i === 0 || x > t[i - 1]))).toBe(true);
+    expect([t[0], t[t.length - 1]]).toEqual([S, S * Math.floor(1500 / S)]);
+  });
+
+  it('not downsampled: every snapshot tick', () => {
+    const t = navTickAxis(300);
+    expect(t).toHaveLength(Math.floor(300 / S));
+    expect(t.slice(0, 3)).toEqual([S, 2 * S, 3 * S]);
+  });
+
+  it.each([100, 1500])('navs[i] is the raw NAV recorded at navTicks[i] (ticks %i)', (ticks) => {
+    const run = simulateWorld({ funds: ALL, directorMode: 'rule', decisionEveryTicks: null, ticks }, 7);
+    const t = navTickAxis(ticks);
+    for (const f of run.funds) {
+      expect(f.navs).toHaveLength(Math.floor(ticks / S));
+      const d = downsample(f.navs, EXPERIMENT_SERIES_POINTS);
+      expect(d).toHaveLength(t.length);
+      d.forEach((v, i) => expect(v).toBe(f.navs[t[i] / S - 1]));
+    }
   });
 });

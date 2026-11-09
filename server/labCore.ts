@@ -4,6 +4,7 @@ import {
   canonicalJson,
   compareArms,
   downsample,
+  downsampleIndex,
   expandArms,
   EXPERIMENT_VARIABLES,
   simulateWorld,
@@ -336,10 +337,10 @@ export interface RunReplay {
   experimentId: number;
   arm: string;
   seed: number;
-  /** Fund key -> NAV series (downsampled), one point every `snapshotEveryTicks` ticks. */
+  /** Fund key -> NAV series (downsampled); navs[k] was recorded at tick navTicks[k]. */
   navs: Record<string, number[]>;
-  /** Effective tick spacing of the stored points: SNAPSHOT_EVERY_TICKS, stretched when the series was downsampled. */
-  snapshotEveryTicks: number;
+  /** Exact tick of every NAV point, so decisions and events line up with the series. */
+  navTicks: number[];
   events: RunResult['events'];
   decisions: DecisionRecord[];
   /** More decisions exist than EXPERIMENT_REPLAY_MAX_DECISIONS; the tail is cut. */
@@ -347,20 +348,36 @@ export interface RunReplay {
   manifest: ExperimentManifest;
 }
 
+/**
+ * Ticks of the stored NAV points. The engine records a NAV when the post-increment tick is a multiple of
+ * SNAPSHOT_EVERY_TICKS (no tick-0 point), so raw point k sits at SNAPSHOT_EVERY_TICKS * (k + 1); stored
+ * series are then thinned by the same downsampleIndex the engine's downsample uses.
+ */
+export function navTickAxis(ticks: number): number[] {
+  const raw = Math.floor(ticks / SNAPSHOT_EVERY_TICKS);
+  const at = (k: number) => SNAPSHOT_EVERY_TICKS * (k + 1);
+  if (raw <= EXPERIMENT_SERIES_POINTS) return Array.from({ length: raw }, (_, k) => at(k));
+  return Array.from({ length: EXPERIMENT_SERIES_POINTS }, (_, i) => at(downsampleIndex(i, raw, EXPERIMENT_SERIES_POINTS)));
+}
+
+/** The run's stored series for arm/seed, or null when the experiment has no such run. */
+export function findRun(row: ExperimentRow, arm: string, seed: number) {
+  const result = parseJson<ExperimentResult>(row.resultJson);
+  return result?.runs?.find((a) => a.label === arm)?.runs.find((r) => r.seed === seed) ?? null;
+}
+
 /** One run of a finished experiment as the replay reads it; null for an unknown arm/seed or unfinished experiment. */
 export function buildRunReplay(row: ExperimentRow, arm: string, seed: number, decisions: DecisionRecord[]): RunReplay | null {
-  const result = parseJson<ExperimentResult>(row.resultJson);
+  const run = findRun(row, arm, seed);
   const manifest = parseJson<ExperimentManifest>(row.manifestJson);
-  const run = result?.runs?.find((a) => a.label === arm)?.runs.find((r) => r.seed === seed);
   if (!run || !manifest) return null;
-  const points = Math.max(0, ...Object.values(run.navs).map((n) => n.length));
   const ticks = parseJson<ExperimentSpec>(row.specJson)?.base.ticks ?? 0;
   return {
     experimentId: row.id,
     arm,
     seed,
     navs: run.navs,
-    snapshotEveryTicks: points < EXPERIMENT_SERIES_POINTS || ticks === 0 ? SNAPSHOT_EVERY_TICKS : ticks / (points - 1),
+    navTicks: navTickAxis(ticks),
     events: run.events,
     decisions: decisions.slice(0, EXPERIMENT_REPLAY_MAX_DECISIONS),
     truncated: decisions.length > EXPERIMENT_REPLAY_MAX_DECISIONS,

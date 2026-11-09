@@ -523,10 +523,15 @@ export function compareArms(arms: { label: string; runs: RunResult[] }[], starti
   return out;
 }
 
+/** Raw index kept as downsampled point i of n out of len (len > n); shared so tick axes cannot drift from the values. */
+export function downsampleIndex(i: number, len: number, n: number): number {
+  return Math.round((i * (len - 1)) / (n - 1));
+}
+
 /** At most n evenly spaced points, always keeping the first and last. */
 export function downsample(xs: number[], n: number): number[] {
   if (xs.length <= n) return xs;
   const out: number[] = [];
-  for (let i = 0; i < n; i++) out.push(xs[Math.round((i * (xs.length - 1)) / (n - 1))]);
+  for (let i = 0; i < n; i++) out.push(xs[downsampleIndex(i, xs.length, n)]);
   return out;
 }
