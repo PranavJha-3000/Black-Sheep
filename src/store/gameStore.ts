@@ -15,7 +15,8 @@ import type { FundSummary, ProjectionPrev } from './stateMapper';
 import type { WorldStatePayload } from '../../server/worldCore';
 import type { ActivityPayload, FundTracePayload } from '../../server/observerCore';
 import type { AnalyticsPayload } from '../../server/analyticsCore';
-import type { ExperimentDetail, ExperimentSummary } from '../../server/labCore';
+import type { ExperimentDetail, ExperimentSummary, RunReplay } from '../../server/labCore';
+import { replayHash } from '../components/replay';
 import type { LeaderboardRow } from '../../server/leaderboardCore';
 import { ANALYTICS_POLL_MS, LAB_POLL_MS, STARTING_CAPITAL } from '../../config/game';
 
@@ -59,7 +60,10 @@ export interface GameStoreState {
   /** TIMELINE archive (fetched only in that view): the leaderboard and done experiments' details by id. */
   chronicle: { board: LeaderboardRow[] | null; list: ExperimentSummary[] | null; details: Record<number, ExperimentDetail>; failed: boolean };
   selectedRun: SelectedRun | null;
+  /** Selecting a run fetches its replay and mirrors it into the URL hash; null clears both. */
   selectRun: (run: SelectedRun | null) => void;
+  /** The selected run's replay (fetched only when a run is selected). */
+  replay: { data: RunReplay | null; loading: boolean; error: string | null };
   selectedExperimentId: number | null;
   openExperiment: (id: number) => void;
   /** POST a new experiment. The admin token is used for this request only and never stored. */
@@ -128,7 +132,7 @@ const SEED_FUND = createFund(STARTING_CAPITAL, 0);
 
 type SeedState = Omit<
   GameStoreState,
-  'reset' | 'selectTicker' | 'poll' | 'selectedTicker' | 'view' | 'selectedFundId' | 'trace' | 'activity' | 'analytics' | 'setView' | 'openFund' | 'lab' | 'chronicle' | 'selectedRun' | 'selectRun' | 'selectedExperimentId' | 'openExperiment' | 'createExperiment' | 'estimateExperiment'
+  'reset' | 'selectTicker' | 'poll' | 'selectedTicker' | 'view' | 'selectedFundId' | 'trace' | 'activity' | 'analytics' | 'setView' | 'openFund' | 'lab' | 'chronicle' | 'selectedRun' | 'selectRun' | 'replay' | 'selectedExperimentId' | 'openExperiment' | 'createExperiment' | 'estimateExperiment'
 >;
 
 function seedState(): SeedState {
@@ -186,6 +190,7 @@ export const useGameStore = create<GameStoreState>((set, get) => ({
   lab: { list: null, detail: null },
   chronicle: { board: null, list: null, details: {}, failed: false },
   selectedRun: null,
+  replay: { data: null, loading: false, error: null },
   selectedExperimentId: null,
   // ---------------------------------------------------------------------------
   // Actions
@@ -204,7 +209,11 @@ export const useGameStore = create<GameStoreState>((set, get) => ({
     set({ view: 'fund', selectedFundId: fundId, trace: null });
     void get().poll();
   },
-  selectRun: (run) => set({ selectedRun: run }),
+  selectRun: (run) => {
+    set({ selectedRun: run, replay: { data: null, loading: run !== null, error: null } });
+    history.replaceState(null, '', run ? replayHash(run) : location.pathname + location.search);
+    if (run) void fetchReplay(run);
+  },
   openExperiment: (id: number) => {
     labFetchedAt = 0;
     set({ view: 'lab', selectedExperimentId: id, lab: { ...get().lab, detail: null } });
@@ -338,4 +347,16 @@ async function fetchChronicle(): Promise<void> {
   const fetched = await Promise.all(missing.map((e) => apiFetch<ExperimentDetail>(`/lab/experiments/${e.id}`).catch(() => null)));
   for (const d of fetched) if (d) details[d.id] = d;
   useGameStore.setState({ chronicle: { board: board?.leaderboard ?? chronicle.board, list: experiments, details, failed: !experiments } });
+}
+
+/** The selected run's replay; an answer for a run no longer selected is dropped. */
+async function fetchReplay(run: SelectedRun): Promise<void> {
+  let replay: GameStoreState['replay'];
+  try {
+    const data = await apiFetch<RunReplay>(`/lab/experiments/${run.experimentId}/runs/${encodeURIComponent(run.arm)}/${run.seed}`);
+    replay = { data, loading: false, error: null };
+  } catch (err) {
+    replay = { data: null, loading: false, error: err instanceof Error ? err.message : String(err) };
+  }
+  if (useGameStore.getState().selectedRun === run) useGameStore.setState({ replay });
 }

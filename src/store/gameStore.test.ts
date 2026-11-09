@@ -127,3 +127,33 @@ describe('gameStore RESEARCH LAB', () => {
     await expect(done).resolves.toEqual({ ok: false, error: 'A valid lab admin token is required' });
   });
 });
+
+describe('gameStore run replay', () => {
+  beforeEach(() => {
+    pending.length = 0;
+    useGameStore.getState().selectRun(null);
+  });
+
+  it('fetches the selected run (arm encoded), mirrors it in the hash, and clears both on deselect', async () => {
+    const run = { experimentId: 3, arm: 'brains=crown:x', seed: 2 };
+    useGameStore.getState().selectRun(run);
+    expect(pending.map((p) => p.path)).toEqual(['/lab/experiments/3/runs/brains%3Dcrown%3Ax/2']);
+    expect(location.hash).toBe('#/timeline/3/brains%3Dcrown%3Ax/2');
+    expect(useGameStore.getState().replay.loading).toBe(true);
+    pending[0].resolve({ experimentId: 3 });
+    await flush();
+    expect(useGameStore.getState().replay).toEqual({ data: { experimentId: 3 }, loading: false, error: null });
+    useGameStore.getState().selectRun(null);
+    expect(location.hash).toBe('');
+    expect(useGameStore.getState().replay.data).toBeNull();
+  });
+
+  it('drops a replay answering a run no longer selected, and reports errors', async () => {
+    useGameStore.getState().selectRun({ experimentId: 1, arm: 'a', seed: 1 });
+    useGameStore.getState().selectRun({ experimentId: 2, arm: 'a', seed: 1 });
+    pending[0].resolve({ experimentId: 1 });
+    pending[1].reject(new Error('run not found'));
+    await flush();
+    expect(useGameStore.getState().replay).toEqual({ data: null, loading: false, error: 'run not found' });
+  });
+});

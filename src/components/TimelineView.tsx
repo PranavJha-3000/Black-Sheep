@@ -2,6 +2,7 @@ import { useMemo } from 'react';
 import { CHRONICLE_MAX_EXPERIMENTS, useGameStore } from '../store/gameStore';
 import type { LeaderboardRow } from '../../server/leaderboardCore';
 import { cardsOf } from './chronicle';
+import RunReplay from './RunReplay';
 import { cx } from './fmt';
 
 const signed = (n: number, dp = 1) => `${n >= 0 ? '+' : '−'}${Math.abs(n * 100).toFixed(dp)}%`;
@@ -81,6 +82,7 @@ export default function TimelineView() {
 
   return (
     <div className="space-y-6">
+      {selected && <RunReplay />}
       {board && <Leaderboard rows={board} />}
       <div className="panel">
         <div className="mb-4 flex items-center justify-between">

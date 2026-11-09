@@ -4,7 +4,7 @@ import type { ExperimentDetail } from '../../server/labCore';
 import { STARTING_CAPITAL } from '../../config/game';
 
 const FUND_NAME: Record<string, string> = Object.fromEntries(FUND_PROFILES.map((p) => [p.key, p.name]));
-const fundName = (k: string) => (FUND_NAME[k] ?? k).toUpperCase();
+export const fundName = (k: string) => (FUND_NAME[k] ?? k).toUpperCase();
 const signed = (n: number, dp = 1) => `${n >= 0 ? '+' : '−'}${Math.abs(n * 100).toFixed(dp)}%`;
 
 export interface Card {
