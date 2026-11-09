@@ -183,6 +183,15 @@ export function parseExperimentRequest(
   return { ok: true, spec };
 }
 
+const NAME_FILTER_MAX = 200;
+
+/** `GET /lab/experiments?name=` — an exact-name filter; absent means no filter. */
+export function parseNameFilter(q: unknown): { ok: true; name: string | null } | { ok: false; error: string } {
+  if (q === undefined) return { ok: true, name: null };
+  if (typeof q !== 'string' || q.length === 0 || q.length > NAME_FILTER_MAX) return fail(`name must be a single string of 1–${NAME_FILTER_MAX} characters.`);
+  return { ok: true, name: q };
+}
+
 /** Validate a create request and price it (worst case) without storing anything: the form's live estimate. */
 export function dryRunExperiment(
   body: unknown,

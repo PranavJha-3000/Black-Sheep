@@ -2,7 +2,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { estimateExperimentCostUsd } from './labBrain';
-import { checkStudyPlan } from './studyPlan';
+import { checkStudyPlan, pendingSubmissions } from './studyPlan';
 
 const DIR = 'paper/study';
 const studyFiles = () =>
@@ -57,5 +57,20 @@ describe('checkStudyPlan', () => {
     const r = checkStudyPlan([{ path: 'a.json', spec: spec({ values: [{ 'crown-meridian': 'claude-haiku-5-5' }, {}] }) }], estimateExperimentCostUsd);
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error).toContain('a.json');
+  });
+});
+
+describe('pendingSubmissions', () => {
+  const files = ['a', 'b', 'c', 'd', 'e'].map((n) => ({ path: `${n}.json`, spec: { name: `study:H1:x:${n}` } }));
+  it('skips done, queued and running names and resubmits failed or new ones', () => {
+    const out = pendingSubmissions(files, [
+      { name: 'study:H1:x:a', id: 1, status: 'done' },
+      { name: 'study:H1:x:b', id: 2, status: 'queued' },
+      { name: 'study:H1:x:c', id: 3, status: 'running' },
+      { name: 'study:H1:x:d', id: 4, status: 'failed' },
+      { name: 'study:H1:x:a', id: 5, status: 'failed' },
+    ]);
+    expect(out.map((o) => o.file.path)).toEqual(['a.json', 'b.json', 'c.json', 'd.json', 'e.json']);
+    expect(out.map((o) => o.skip)).toEqual([{ id: 1, status: 'done' }, { id: 2, status: 'queued' }, { id: 3, status: 'running' }, null, null]);
   });
 });

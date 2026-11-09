@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { holm } from '@black-sheep/engine/stats';
 import { STARTING_CAPITAL } from '../config/game';
-import { buildPaperFiles, pairedContrasts, studyRows, svgForest, texTable, toCsv, type Contrast, type StudyRow } from './paperCore';
+import { buildPaperFiles, costQuality, failedCsv, latestDoneStudy, pairedContrasts, studyRows, svgForest, texH4Table, texTable, toCsv, type Contrast, type StudyRow } from './paperCore';
 
 const M = 'claude-opus-5-5';
 const nav = (ret: number) => [STARTING_CAPITAL, STARTING_CAPITAL * (1 + ret)];
@@ -121,10 +121,54 @@ describe('buildPaperFiles', () => {
   it('emits csv, a table and forest per hypothesis, returns figure for H1 only, all tagged', () => {
     const files = buildPaperFiles([exp(1, 'study:H1:a', [0, 0, 0], [0.1, 0.1, 0.1]), exp(2, 'study:H3:a', [0, 0, 0], [0.2, 0.2, 0.2])]);
     expect(files.map((f) => f.path)).toEqual([
-      'paper/data/study.csv', 'paper/tables/H1.tex', 'paper/figures/H1-forest.svg', 'paper/figures/H1-returns.svg', 'paper/tables/H3.tex', 'paper/figures/H3-forest.svg',
+      'paper/data/study.csv', 'paper/data/failed.csv', 'paper/tables/H1.tex', 'paper/figures/H1-forest.svg', 'paper/figures/H1-returns.svg', 'paper/tables/H4.tex',
+      'paper/tables/H3.tex', 'paper/figures/H3-forest.svg',
     ]);
-    expect(files[1].content.split('\n')[0]).toMatch(/^% exp=1 cfg=[0-9a-f]{8}$/);
-    expect(files[5].content.split('\n')[0]).toMatch(/^<!-- exp=2 cfg=[0-9a-f]{8} -->$/);
-    expect(files[3].content.match(/<polyline /g)).toHaveLength(2);
+    expect(files[2].content.split('\n')[0]).toMatch(/^% exp=1 cfg=[0-9a-f]{8}$/);
+    expect(files[7].content.split('\n')[0]).toMatch(/^<!-- exp=2 cfg=[0-9a-f]{8} -->$/);
+    expect(files[4].content.match(/<polyline /g)).toHaveLength(2);
+    expect(files[5].content.split('\n')[0]).toMatch(/^% exp=1 cfg=[0-9a-f]{8}$/);
+  });
+});
+
+describe('resubmission and failures', () => {
+  it('keeps only the newest done experiment per study name', () => {
+    const old = { ...exp(1, 'study:H1:a', [0, 0], [0.1, 0.1]), status: 'done' };
+    const failed = { ...exp(2, 'study:H1:a', [0, 0], [0.9, 0.9]), status: 'failed', error: 'boom' };
+    const fresh = { ...exp(3, 'study:H1:a', [0, 0], [0.3, 0.3]), status: 'done' };
+    const { kept, ignored } = latestDoneStudy([old, failed, fresh]);
+    expect(kept.map((e) => e.id)).toEqual([3]);
+    expect(ignored.map((e) => e.id)).toEqual([1]);
+    const csv = buildPaperFiles([old, failed, fresh]).find((f) => f.path === 'paper/data/study.csv')!.content;
+    expect(new Set(csv.trim().split('\n').slice(1).map((l) => l.split(',')[1]))).toEqual(new Set(['3']));
+  });
+
+  it('lists every failed study experiment with its error', () => {
+    const csv = failedCsv([
+      { ...exp(1, 'study:H1:a', [0], [0]), status: 'done' },
+      { ...exp(2, 'study:H2:b', [0], [0]), status: 'failed', error: 'budget exhausted at $1.00, then "x"' },
+      { ...exp(3, 'lab:other', [0], [0]), status: 'failed', error: 'not study' },
+    ]);
+    expect(csv).toBe('experimentId,name,error\n2,study:H2:b,"budget exhausted at $1.00, then ""x"""\n');
+  });
+});
+
+describe('H4 cost vs quality', () => {
+  it('divides the mean paired difference by mean cost per run, with a seeded bootstrap CI', () => {
+    const rows: StudyRow[] = [];
+    [1, 2, 3, 4].forEach((s, i) => {
+      rows.push(row({ arm: 'base', seed: s }));
+      rows.push(row({ arm: 'm', seed: s, totalReturnPct: [2, 4, 6, 8][i], costUsd: [1, 2, 1, 2][i] }));
+    });
+    const [h] = costQuality(rows, 'H1', 'base');
+    expect(h).toMatchObject({ arm: 'm', n: 4, meanDiff: 5, meanCostUsd: 1.5 });
+    expect(h.ppPerUsd).toBeCloseTo(5 / 1.5);
+    expect(h.ci![0]).toBeLessThanOrEqual(h.ppPerUsd!);
+    expect(h.ci![1]).toBeGreaterThanOrEqual(h.ppPerUsd!);
+    expect(costQuality(rows, 'H1', 'base')).toEqual([h]);
+    const tex = texH4Table([h, { ...h, arm: 'free', ppPerUsd: null, ci: null }], 'H4', 'tab:H4', 'exp=1 cfg=abc');
+    expect(tex.split('\n')[0]).toBe('% exp=1 cfg=abc');
+    expect(tex).toContain('m & 4 & 5.00 & 1.5000 & 3.33 & [');
+    expect(tex).toContain('free & 4 & 5.00 & 1.5000 & — & — \\\\');
   });
 });

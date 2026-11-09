@@ -1,6 +1,7 @@
 import { expandArms, experimentManifest, type ExperimentSpec } from '@black-sheep/engine/experiment';
 import type { Behaviour } from '@black-sheep/engine/behaviour';
 import { seriesMetrics } from '@black-sheep/engine/metrics';
+import { mulberry32 } from '@black-sheep/engine/market';
 import { bootstrapMeanCI, holm, signTestP } from '@black-sheep/engine/stats';
 import { STARTING_CAPITAL } from '../config/game';
 import type { ExperimentResult } from './labCore';
@@ -223,12 +224,112 @@ export function svgReturnSeries(series: { label: string; points: number[] }[], t
   ].join('\n');
 }
 
-type StoredExperiment = { id: number; name: string; resultJson: unknown; specJson: unknown };
+type StoredExperiment = { id: number; name: string; resultJson: unknown; specJson: unknown; status?: string; error?: string | null };
+
+const isStudy = (e: StoredExperiment) => e.name.startsWith('study:');
+
+/**
+ * Resubmission rule (PREREGISTRATION amendment 1): per study name only the newest done experiment counts.
+ * Rows without a status are treated as done (callers that load done rows only).
+ */
+export function latestDoneStudy(experiments: StoredExperiment[]): { kept: StoredExperiment[]; ignored: StoredExperiment[] } {
+  const newest = new Map<string, StoredExperiment>();
+  for (const e of experiments) {
+    if (!isStudy(e) || (e.status ?? 'done') !== 'done') continue;
+    const cur = newest.get(e.name);
+    if (!cur || e.id > cur.id) newest.set(e.name, e);
+  }
+  const keep = new Set(newest.values());
+  return {
+    kept: experiments.filter((e) => keep.has(e)),
+    ignored: experiments.filter((e) => isStudy(e) && (e.status ?? 'done') === 'done' && !keep.has(e)),
+  };
+}
+
+/** Every failed study experiment with its error: PREREGISTRATION lists them rather than excluding silently. */
+export function failedCsv(experiments: StoredExperiment[]): string {
+  const lines = experiments.filter((e) => isStudy(e) && e.status === 'failed').map((e) => [e.id, e.name, e.error ?? ''].map(csvCell).join(','));
+  return ['experimentId,name,error', ...lines].join('\n') + '\n';
+}
+
+export interface CostQuality {
+  arm: string;
+  n: number;
+  meanDiff: number;
+  meanCostUsd: number;
+  /** Mean paired return difference (pp) per mean USD per run; null when the arm spent nothing. */
+  ppPerUsd: number | null;
+  ci: [number, number] | null;
+}
+
+/**
+ * H4 (PREREGISTRATION amendment 1): per model arm, mean paired return difference vs the baseline (pp)
+ * divided by the arm's mean cost per run (USD), with a seeded percentile bootstrap over seed pairs
+ * (2000 iterations, seed 1, as bootstrapMeanCI). A resample whose mean cost is $0 is dropped.
+ */
+export function costQuality(rows: StudyRow[], hypothesis: string, baselineArm: string, { iters = 2000, seed = 1 } = {}): CostQuality[] {
+  const mine = rows.filter((r) => r.hypothesis === hypothesis);
+  const key = (r: StudyRow) => `${r.experimentId}|${r.fundKey}|${r.seed}`;
+  const base = new Map(mine.filter((r) => r.arm === baselineArm).map((r) => [key(r), r.totalReturnPct]));
+  const armNames = [...new Set(mine.map((r) => r.arm))].filter((a) => a !== baselineArm);
+  return armNames.flatMap((arm) => {
+    const pairs = mine.flatMap((r) => (r.arm === arm && base.has(key(r)) ? [{ d: r.totalReturnPct - base.get(key(r))!, c: r.costUsd }] : []));
+    if (pairs.length === 0) return [];
+    const n = pairs.length;
+    const meanDiff = mean(pairs.map((p) => p.d));
+    const meanCostUsd = mean(pairs.map((p) => p.c));
+    let ci: [number, number] | null = null;
+    if (n >= 2) {
+      const rand = mulberry32(seed);
+      const stats: number[] = [];
+      for (let i = 0; i < iters; i++) {
+        let sd = 0;
+        let sc = 0;
+        for (let j = 0; j < n; j++) {
+          const p = pairs[Math.floor(rand() * n)];
+          sd += p.d;
+          sc += p.c;
+        }
+        if (sc > 0) stats.push(sd / sc);
+      }
+      stats.sort((a, b) => a - b);
+      const at = (q: number) => stats[Math.min(stats.length - 1, Math.max(0, Math.floor(q * stats.length)))];
+      if (stats.length) ci = [at(0.025), at(0.975)];
+    }
+    return [{ arm, n, meanDiff, meanCostUsd, ppPerUsd: meanCostUsd > 0 ? meanDiff / meanCostUsd : null, ci }];
+  });
+}
+
+export function texH4Table(rows: CostQuality[], caption: string, label: string, tag: string): string {
+  const body = rows.map(
+    (r) => `${texEsc(r.arm)} & ${r.n} & ${f2(r.meanDiff)} & ${f4(r.meanCostUsd)} & ${r.ppPerUsd === null ? '—' : f2(r.ppPerUsd)} & ${r.ci ? `[${f2(r.ci[0])}, ${f2(r.ci[1])}]` : '—'} \\\\`,
+  );
+  return [
+    `% ${tag}`,
+    '\\begin{table}[ht]',
+    '\\centering',
+    '\\begin{tabular}{lrrrrr}',
+    '\\toprule',
+    'Arm & $n$ & Mean diff (pp) & Mean cost (\\$/run) & pp per \\$ & 95\\% CI \\\\',
+    '\\midrule',
+    ...body,
+    '\\bottomrule',
+    '\\end{tabular}',
+    `\\caption{${texEsc(caption)}}`,
+    `\\label{${label}}`,
+    '\\end{table}',
+    '',
+  ].join('\n');
+}
 
 /** Every file the paper needs (path relative to the repo root), built from finished `study:*` experiments. */
-export function buildPaperFiles(experiments: StoredExperiment[]): { path: string; content: string }[] {
+export function buildPaperFiles(all: StoredExperiment[]): { path: string; content: string }[] {
+  const experiments = latestDoneStudy(all).kept;
   const rows = studyRows(experiments);
-  const files = [{ path: 'paper/data/study.csv', content: toCsv(rows) }];
+  const files = [
+    { path: 'paper/data/study.csv', content: toCsv(rows) },
+    { path: 'paper/data/failed.csv', content: failedCsv(all) },
+  ];
   for (const h of [...new Set(rows.map((r) => r.hypothesis))].sort()) {
     const mine = experiments.filter((e) => e.name.startsWith(`study:${h}:`) && rows.some((r) => r.experimentId === e.id));
     const tag = `exp=${mine.map((e) => e.id).join(',')} cfg=${[...new Set(rows.filter((r) => r.hypothesis === h).map((r) => r.configHash))].join(',')}`;
@@ -237,7 +338,10 @@ export function buildPaperFiles(experiments: StoredExperiment[]): { path: string
     const contrasts = pairedContrasts(rows, h, baseline);
     files.push({ path: `paper/tables/${h}.tex`, content: texTable(contrasts, `${h}: return difference vs ${baseline}`, `tab:${h}`, tag) });
     files.push({ path: `paper/figures/${h}-forest.svg`, content: svgForest(contrasts, `${h}: return difference vs ${baseline} (pp)`, tag) });
-    if (h === 'H1') files.push({ path: 'paper/figures/H1-returns.svg', content: svgReturnSeries(meanNavSeries(mine, rows), 'H1: mean NAV per arm', tag) });
+    if (h === 'H1') {
+      files.push({ path: 'paper/figures/H1-returns.svg', content: svgReturnSeries(meanNavSeries(mine, rows), 'H1: mean NAV per arm', tag) });
+      files.push({ path: 'paper/tables/H4.tex', content: texH4Table(costQuality(rows, 'H1', baseline), `H4: return difference vs ${baseline} per USD`, 'tab:H4', tag) });
+    }
   }
   return files;
 }

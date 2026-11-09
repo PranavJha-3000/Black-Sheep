@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { experimentManifest } from '@black-sheep/engine/experiment';
 import { prisma } from './db';
 import { wrap } from './auth';
-import { buildExperimentDetail, buildExperimentSummary, buildRunReplay, checkLabToken, decisionFromRow, dryRunExperiment, findRun, parseExperimentRequest } from './labCore';
+import { buildExperimentDetail, buildExperimentSummary, buildRunReplay, checkLabToken, decisionFromRow, dryRunExperiment, findRun, parseExperimentRequest, parseNameFilter } from './labCore';
 import { EXPERIMENT_REPLAY_MAX_DECISIONS } from '../config/game';
 import { makeLeaderboardCache } from './leaderboardCore';
 import { parseFundId } from './observerCore';
@@ -17,9 +17,15 @@ const LIST_LIMIT = 50;
 
 labRouter.get(
   '/experiments',
-  wrap(async (_req, res) => {
+  wrap(async (req, res) => {
+    const filter = parseNameFilter(req.query.name);
+    if (!filter.ok) {
+      res.status(400).json({ error: filter.error });
+      return;
+    }
     // Summary columns only: result blobs can be large and the list is polled.
     const rows = await prisma.experiment.findMany({
+      where: filter.name === null ? undefined : { name: filter.name },
       orderBy: { id: 'desc' },
       take: LIST_LIMIT,
       select: { id: true, createdAt: true, name: true, status: true, variable: true, specJson: true, finishedAt: true },

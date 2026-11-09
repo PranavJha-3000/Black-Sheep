@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { buildExperimentDetail, buildExperimentSummary, buildRunReplay, navTickAxis, checkLabToken, decisionFromRow, dryRunExperiment, parseExperimentRequest, runExperimentSpec, type ExperimentRow } from './labCore';
+import { buildExperimentDetail, buildExperimentSummary, buildRunReplay, navTickAxis, checkLabToken, decisionFromRow, dryRunExperiment, parseExperimentRequest, parseNameFilter, runExperimentSpec, type ExperimentRow } from './labCore';
 import { downsample, simulateWorld } from '@black-sheep/engine/experiment';
 import { EXPERIMENT_SERIES_POINTS, SNAPSHOT_EVERY_TICKS } from '../config/game';
 import { BudgetExhausted } from './labBrain';
@@ -324,5 +324,16 @@ describe('dryRunExperiment', () => {
     expect(dryRunExperiment(body(), KEYED)).toEqual({ ok: true, estimateUsd: 0 });
     expect(dryRunExperiment(modelBody(), { providerConfigured: false })).toEqual({ ok: false, error: 'Model brains need a provider key on the server.' });
     expect(dryRunExperiment(body({ name: '' }), KEYED).ok).toBe(false);
+  });
+});
+
+describe('parseNameFilter', () => {
+  it('accepts an absent or exact name and rejects arrays, empty and over-long names', () => {
+    expect(parseNameFilter(undefined)).toEqual({ ok: true, name: null });
+    expect(parseNameFilter('study:H1:opus:s1')).toEqual({ ok: true, name: 'study:H1:opus:s1' });
+    expect(parseNameFilter(['a', 'b']).ok).toBe(false);
+    expect(parseNameFilter('').ok).toBe(false);
+    expect(parseNameFilter('x'.repeat(200)).ok).toBe(true);
+    expect(parseNameFilter('x'.repeat(201)).ok).toBe(false);
   });
 });

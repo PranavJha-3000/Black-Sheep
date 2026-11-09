@@ -33,3 +33,19 @@ export function checkStudyPlan(
   }
   return { ok: true, totalUsd: perFile.reduce((s, f) => s + f.usd, 0), perFile };
 }
+
+/**
+ * Resumable submission: a file whose name already has a non-failed experiment (queued, running or done)
+ * is skipped, so a re-run after a partial failure neither pays twice nor double-counts seeds.
+ * Failed experiments are resubmitted under the same name (PREREGISTRATION amendment 1).
+ */
+export function pendingSubmissions<F extends { path: string; spec: unknown }>(
+  files: F[],
+  existing: { name: string; id: number; status: string }[],
+): { file: F; skip: { id: number; status: string } | null }[] {
+  return files.map((file) => {
+    const name = (file.spec as { name?: unknown }).name;
+    const live = existing.filter((e) => e.name === name && e.status !== 'failed').sort((a, b) => b.id - a.id)[0];
+    return { file, skip: live ? { id: live.id, status: live.status } : null };
+  });
+}

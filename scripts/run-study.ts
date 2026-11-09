@@ -1,24 +1,28 @@
 // Prices the pre-registered study and, only with --confirm, submits it to the lab API.
 //
 //   npm run study:run                 dry run: per-file and total worst-case $
-//   npm run study:run -- --confirm    POST every paper/study/*.json (spends money)
+//   npm run study:run -- --confirm    POST every paper/study/*.json not already queued, running or done (spends money)
 //
 // Env (with --confirm): LAB_ADMIN_TOKEN (required), LAB_API_URL (default http://localhost:3001).
 import 'dotenv/config';
 import { execFileSync } from 'node:child_process';
 import { readdirSync, readFileSync } from 'node:fs';
 import { estimateExperimentCostUsd } from '../server/labBrain';
-import { checkStudyPlan } from '../server/studyPlan';
+import { checkStudyPlan, pendingSubmissions } from '../server/studyPlan';
 
 const PREREG = 'paper/PREREGISTRATION.md';
 const DIR = 'paper/study';
 
-// The commit is the pre-registration timestamp: refuse unless it is tracked and unmodified.
+// The commit is the pre-registration timestamp: refuse unless the prereg and every study spec are tracked and unmodified.
+const COMMIT_FIRST = `Commit ${PREREG} and ${DIR}/ before running the study.`;
 try {
   execFileSync('git', ['ls-files', '--error-unmatch', PREREG], { stdio: 'ignore' });
-  execFileSync('git', ['diff', '--quiet', 'HEAD', '--', PREREG], { stdio: 'ignore' });
-} catch {
-  console.error(`Commit ${PREREG} before running the study.`);
+  execFileSync('git', ['diff', '--quiet', 'HEAD', '--', PREREG, DIR], { stdio: 'ignore' });
+  const untracked = execFileSync('git', ['ls-files', '--others', '--exclude-standard', DIR], { encoding: 'utf8' });
+  if (untracked.trim()) throw new Error(`untracked: ${untracked.trim().split('\n').join(', ')}`);
+} catch (err) {
+  console.error(COMMIT_FIRST);
+  console.error(`(${(err as Error).message.split('\n')[0]})`);
   process.exit(1);
 }
 
@@ -45,24 +49,42 @@ if (!token) {
   console.error('LAB_ADMIN_TOKEN is not set; the lab API refuses writes without it. Nothing was submitted.');
   process.exit(1);
 }
-const url = `${process.env.LAB_API_URL ?? 'http://localhost:3001'}/lab/experiments`;
+const api = `${process.env.LAB_API_URL ?? 'http://localhost:3001'}/lab/experiments`;
+const TIMEOUT_MS = 30_000;
 
-// Sequential, stop on the first failure so a partial submission is easy to resume by hand.
 const submitted: string[] = [];
 const stop = (msg: string): never => {
   console.error(msg);
-  console.error(`Stopped. Submitted ${submitted.length}/${files.length}: ${submitted.join(', ') || 'none'}`);
+  console.error(`Stopped. Submitted this run ${submitted.length}: ${submitted.join(', ') || 'none'}`);
   process.exit(1);
 };
+
+// Resume: look up every name first; anything already queued, running or done is not paid for again.
+const existing: { name: string; id: number; status: string }[] = [];
 for (const f of files) {
-  const res = await fetch(url, {
+  const name = String((f.spec as { name?: unknown }).name);
+  const res = await fetch(`${api}?name=${encodeURIComponent(name)}`, { signal: AbortSignal.timeout(TIMEOUT_MS) }).catch((err: Error) =>
+    stop(`${f.path}: lookup failed (${err.message}).`),
+  );
+  if (!res.ok) stop(`${f.path}: lookup HTTP ${res.status} ${await res.text()}`);
+  existing.push(...((await res.json()) as { experiments: { name: string; id: number; status: string }[] }).experiments);
+}
+
+// Sequential, stop on the first failure; re-running resumes from where it stopped.
+for (const { file: f, skip } of pendingSubmissions(files, existing)) {
+  if (skip) {
+    console.log(`skip ${f.path} (already #${skip.id} ${skip.status})`);
+    continue;
+  }
+  const res = await fetch(api, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
     body: JSON.stringify(f.spec),
-  }).catch((err: Error) => stop(`${f.path}: request failed (${err.message}).`));
+    signal: AbortSignal.timeout(TIMEOUT_MS),
+  }).catch((err: Error) => stop(`${f.path}: request failed (${err.message}); re-run to resume, it skips anything the server did create.`));
   const body = await res.text();
   if (!res.ok) stop(`${f.path}: HTTP ${res.status} ${body}`);
   submitted.push(f.path);
   console.log(`${f.path} -> ${body}`);
 }
-console.log(`Submitted ${submitted.length}/${files.length}.`);
+console.log(`Submitted this run: ${submitted.length}.`);
