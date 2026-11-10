@@ -38,6 +38,11 @@
 
 ## Log
 
+### 2026-11-10 · Claude Opus 5.5 (Claude Code) · README and paper rewrite
+- README restructured after Emergence-World/Sotopia (what it is, funds, research questions, measures, world design, models, stack, structure, get started, study, citation). Repo description updated on GitHub.
+- `paper/main.tex` restructured after arXiv 2610.22319 (at-a-glance table, How the funds trade, Instructions, Behaviours, Verification, Related work, Responsible development); no protocol content changed. `paper/refs.bib` entries now carry verified titles/authors (Emergence World S1/S2, Sotopia, 2610.22319).
+- `.gitignore` ignores `paper/*.pdf` and LaTeX build output. PDF compile still NOT VERIFIED (no TeX toolchain).
+
 ### 2026-11-10 · Claude Opus 5.5 (Claude Code) · Stage 10 Phase 5: cross-vendor brains docs
 CHANGED: D-046, D-047, FEATURE-017, FLOW (routing), ARCHITECTURE (`openaiCompat`). `PREREGISTRATION.md` and `CONSTRAINTS.md` untouched.
 WHY: record lab-only cross-vendor brains, pricing source and the comparability limits. H1 stays Anthropic-only, so no pre-registration amendment.
