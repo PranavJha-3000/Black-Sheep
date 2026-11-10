@@ -24,6 +24,7 @@ The world ticks every 5 s whether or not anyone watches. Views: WORLD, FUNDS, FU
 | Variable | Without it | With it |
 |---|---|---|
 | `ANTHROPIC_API_KEY` | Funds trade on their deterministic policies (decisions tagged `policy`). | Funds decide with Claude Opus 5.5 via research tools, capped at $2/fund/day and $10/day (`config/funds.ts`, `config/game.ts`). Watch `LlmCallLog` cost on the first run. |
+| `OPENROUTER_API_KEY` | Lab experiments cannot use cross-vendor brains (OpenAI, Google, xAI models). | RESEARCH LAB can give a fund an OpenRouter model brain (lab only; the live world stays on Anthropic, D-046). Each model brain needs its own provider's key. |
 | `LAB_ADMIN_TOKEN` | RESEARCH LAB is view-only (creating returns 503). | Enter the token in RESEARCH LAB → + NEW to run experiments. |
 | `DIRECTOR_MODE` | `rule` (default) | `none` disables the World Director; `jev` is a disabled stub until Jev's API contract exists (`server/providers/jev.ts`). |
 | `JWT_SECRET`, `WORLD_SEED` | Ephemeral secret / default seed | Fixed values |

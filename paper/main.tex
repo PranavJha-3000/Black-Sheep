@@ -58,7 +58,7 @@ Long-horizon evaluations of agents need worlds that are repeatable, instrumented
 \paragraph{Memory.} \texttt{memory} has four modes: \texttt{none}, \texttt{episodic}, \texttt{reflective}, \texttt{full}. After each tick's decisions, episodes and reflections are written into the fund's in-world memory (model-backed funds only; policy funds have none). A reflection is written once \cfg{MEMORY_REFLECT_EVERY_CLOSES} = 3 closed trades accumulate; \cfg{MEMORY_PROMPT_ENTRIES} = 6 memories appear in the prompt, and \texttt{recall\_memory} returns \cfg{MEMORY_RECALL_DEFAULT} = 10 by default and at most \cfg{MEMORY_RECALL_MAX} = 20.
 
 \section{Protocol}
-The study was pre-registered in \texttt{paper/PREREGISTRATION.md}, committed as \texttt{9b18473} before any run, and amended once, before any run, in commit \texttt{adc4636} (Amendment~1). Deviations from this protocol are logged in Appendix~\ref{app:repro}.
+The study was pre-registered in \texttt{paper/PREREGISTRATION.md}, committed as tag \texttt{prereg-v1} (commit \texttt{9b18473}) before any run, and amended once, before any run, in tag \texttt{prereg-amend-1} (commit \texttt{adc4636}, Amendment~1). Deviations from this protocol are logged in Appendix~\ref{app:repro}.
 
 \paragraph{Design.} Every run has the three funds above, 500 ticks, \texttt{decisionEveryTicks} = 10, \texttt{directorMode} = \texttt{rule} (unless it is the variable) and \texttt{memory} = \texttt{none} (unless it is the variable). Seeds are 1--20. Each experiment varies one variable across arms on identical seeds.
 \begin{itemize}
@@ -86,14 +86,14 @@ H3 Director & 5 seeds & 4 & 5.92 \\
 \label{tab:blocks}
 \end{table}
 
-\paragraph{Metrics.} The primary metric is the paired difference in total return, in percentage points, against the hypothesis baseline. Total return is (final NAV $-$ \cfg{STARTING_CAPITAL}) / \cfg{STARTING_CAPITAL}. Secondary metrics:
+\paragraph{Metrics.} The primary metric is the paired difference in total return, in percentage points, against the hypothesis baseline. Total return is (NAV at the last snapshot $-$ \cfg{STARTING_CAPITAL}) / \cfg{STARTING_CAPITAL}; with snapshots every 3 ticks, the last snapshot of a 500-tick run is at tick 498. Secondary metrics:
 \begin{itemize}
-\item \emph{Max drawdown}: the largest peak-to-trough fall of NAV, as a fraction.
+\item \emph{Max drawdown}: the largest peak-to-trough fall of NAV, in percent of the peak.
 \item \emph{Sharpe}: the mean of per-snapshot NAV returns divided by their sample standard deviation, where a return is $\mathrm{NAV}_i/\mathrm{NAV}_{i-1}-1$ between consecutive snapshots (every 3 ticks). There is no risk-free rate and no annualisation, because the simulation has no calendar. It is null with fewer than two returns or zero volatility.
 \item \emph{Survival}: the fund was not liquidated.
 \item \emph{Fallback rate} and \emph{USD per decision}.
 \end{itemize}
-Five behaviour metrics are computed per fund per run and averaged over seeds with a bootstrap 95\% CI:
+Five behaviour metrics are computed per fund per run and exported as per fund-run values in \texttt{paper/data/study.csv}:
 \begin{itemize}
 \item \emph{actionEntropy}: Shannon entropy of the counts of buy, short, close and hold over all decisions, divided by $\log_2 4$; 0 means one action only, 1 means uniform.
 \item \emph{riskCompliance}: the share of non-hold proposals that \texttt{enforceRiskLimit} left unchanged; a proposal the limit refused counts as non-compliant.
@@ -145,6 +145,8 @@ The worst-case dry-run total printed by \texttt{npm run study:run} is 793.92 USD
 \item Sharpe is per snapshot, unannualised, and has no risk-free rate; it is not comparable to published Sharpe ratios.
 \item Run cost is attributed to the subject fund, which is exact only because each arm has one model fund.
 \item Models are called at \texttt{effort} = \texttt{low} with a four-round tool budget and a reconsider gate that skips calls when the world is quiet.
+\item For a model fund, the behaviour trail mixes the model's decisions with the policy decisions substituted when the reconsider gate skips a call, so actionEntropy, riskCompliance and tradeRate describe that mix, not the model alone.
+\item A liquidated fund's exposure falls to zero, so a shock shortly before a liquidation reads as a full de-risk in shockDeRisk.
 \end{itemize}
 % WRITE AFTER DATA: add limitations observed in the data.
 
@@ -157,11 +159,11 @@ The simulation uses fictional companies and no real market data, and results do 
 
 \appendix
 \section{Reproducibility}\label{app:repro}
-\paragraph{Pipeline.} \texttt{npm run study:run} validates the specs in \texttt{paper/study/*.json} against the lab's request rules, prints the worst-case cost per file and in total, and refuses to run unless the pre-registration and every spec are committed and unmodified. Only with \texttt{--confirm} does it submit them, resumably by name. \texttt{npm run paper:export} then reads every finished \texttt{study:*} experiment from the database and writes \texttt{paper/data/study.csv}, \texttt{paper/data/failed.csv}, \texttt{paper/tables/H*.tex} and \texttt{paper/figures/*.svg}.
+\paragraph{Pipeline.} \texttt{npm run study:run} validates the specs in \texttt{paper/study/*.json} against the lab's request rules, prints the worst-case cost per file and in total, and refuses to run unless the pre-registration and every spec are committed and unmodified. Only with \texttt{--confirm} does it submit them, resumably by name. \texttt{npm run paper:export} then reads every done or failed experiment whose name and \texttt{configHash} match a committed spec (it stops on a same-named experiment with another hash and lists other \texttt{study:*} experiments as ignored), and writes \texttt{paper/data/study.csv}, \texttt{paper/data/failed.csv}, \texttt{paper/tables/H*.tex} (including \texttt{H4.tex}) and \texttt{paper/figures/*.svg}.
 
-\paragraph{Determinism.} A policy run is determined by its (arm, seed) pair: the market RNG is a seeded \texttt{mulberry32} stream and the run digest hashes prices, NAVs and decisions only. Experiment manifests carry a \texttt{configHash} and a \texttt{worldConstantsHash} over \texttt{config/game.ts}; every generated table and figure starts with a provenance tag listing the experiment ids and config hashes. Model calls are not deterministic, so model arms are reproducible in design, not in outcome.
+\paragraph{Determinism.} A policy run is determined by its (arm, seed) pair: the market RNG is a seeded \texttt{mulberry32} stream and the run digest hashes the final prices, the NAV series and the tick count only. Experiment manifests carry a \texttt{configHash} and a \texttt{worldConstantsHash} over \texttt{config/game.ts}; every generated table and figure starts with a provenance tag listing the experiment ids and config hashes. Model calls are not deterministic, so model arms are reproducible in design, not in outcome.
 
-\paragraph{Commits.} Pre-registration: \texttt{9b18473}. Amendment~1: \texttt{adc4636}.
+\paragraph{Commits.} Pre-registration: tag \texttt{prereg-v1} (commit \texttt{9b18473}). Amendment~1: tag \texttt{prereg-amend-1} (commit \texttt{adc4636}).
 
 \paragraph{Deviations.}
 % WRITE AFTER DATA: log every deviation from the pre-registration here, or state that there were none.
