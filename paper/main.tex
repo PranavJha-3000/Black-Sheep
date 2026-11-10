@@ -6,7 +6,8 @@
 \usepackage[margin=1in]{geometry}
 \usepackage{booktabs}
 \usepackage{graphicx}
-\usepackage{svg}
+\newif\ifhassvg
+\IfFileExists{svg.sty}{\usepackage{svg}\hassvgtrue}{}
 \usepackage{amsmath}
 \usepackage{url}
 \usepackage[hidelinks]{hyperref}
@@ -16,7 +17,7 @@
 % \gentable{H1}: the exporter's table, if the study has run.
 \newcommand{\gentable}[1]{\IfFileExists{tables/#1.tex}{\input{tables/#1.tex}}{\par\emph{[Table #1 not generated yet.]}\par}}
 % \genfig{H1-forest}{caption}: the exporter's SVG figure, if the study has run.
-\newcommand{\genfig}[2]{\IfFileExists{figures/#1.svg}{\begin{figure}[ht]\centering\includesvg[width=0.9\linewidth]{figures/#1}\caption{#2}\label{fig:#1}\end{figure}}{\par\emph{[Figure #1 not generated yet.]}\par}}
+\newcommand{\genfig}[2]{\ifhassvg\IfFileExists{figures/#1.svg}{\begin{figure}[ht]\centering\includesvg[width=0.9\linewidth]{figures/#1}\caption{#2}\label{fig:#1}\end{figure}}{\par\emph{[Figure #1 not generated yet.]}\par}\else\par\emph{[Figure #1 omitted: svg package not installed.]}\par\fi}
 
 \title{Black Sheep: a controlled laboratory for AI hedge funds}
 \author{Black Sheep project}
@@ -52,7 +53,7 @@ Long-horizon evaluations of agents need worlds that are repeatable, instrumented
 
 \paragraph{Reconsider gate.} A model is called only when \texttt{shouldRivalReconsider} reports a change since its last model input: this is its first decision, or a new event appeared, or any ticker's net flow moved by more than 250{,}000 USD, or the fund's number of positions changed. Otherwise the fund takes its policy decision for that slot (source \texttt{policy}, cost zero).
 
-\paragraph{Budget metering and fallback.} Each experiment has one hard budget. Before each call, \texttt{makeExperimentDecide} adds the worst-case cost of a call (every round at \cfg{DECISION_MAX_TOKENS}, prompt estimate \cfg{DECISION_PROMPT_TOKENS_ESTIMATE} = 3000 tokens) to the spend so far and stops the experiment with \texttt{BudgetExhausted} if that would exceed the limit. If the loop returns no valid decision, the fund takes its policy decision and the record is marked \texttt{fallback}; the fallback rate is fallbacks over model-attempted decisions. Spend is recorded after every paid call.
+\paragraph{Budget metering and fallback.} Each experiment has one hard budget. Before each call, \texttt{makeExperimentDecide} adds the estimated worst-case cost of a call (every round at \cfg{DECISION_MAX_TOKENS}, prompt estimate \cfg{DECISION_PROMPT_TOKENS_ESTIMATE} = 3000 tokens) to the spend so far and stops the experiment with \texttt{BudgetExhausted} if that would exceed the limit. If the loop returns no valid decision, the fund takes its policy decision and the record is marked \texttt{fallback}; the fallback rate is fallbacks over model-attempted decisions. Spend is recorded after every paid call.
 
 \paragraph{Memory.} \texttt{memory} has four modes: \texttt{none}, \texttt{episodic}, \texttt{reflective}, \texttt{full}. After each tick's decisions, episodes and reflections are written into the fund's in-world memory (model-backed funds only; policy funds have none). A reflection is written once \cfg{MEMORY_REFLECT_EVERY_CLOSES} = 3 closed trades accumulate; \cfg{MEMORY_PROMPT_ENTRIES} = 6 memories appear in the prompt, and \texttt{recall\_memory} returns \cfg{MEMORY_RECALL_DEFAULT} = 10 by default and at most \cfg{MEMORY_RECALL_MAX} = 20.
 
@@ -134,7 +135,7 @@ Each is null when its denominator is empty.
 % WRITE AFTER DATA: behaviour comparison across arms and two or three replayed case studies.
 
 \section{Cost}
-The study's budget ceiling is the worst-case dry-run total printed by \texttt{npm run study:run}: 793.92 USD over 42 experiments. This is a ceiling that each call is reserved against, not the amount spent. Actual spend per run is in the \texttt{costUsd} column of \texttt{paper/data/study.csv}.
+The worst-case dry-run total printed by \texttt{npm run study:run} is 793.92 USD over 42 experiments. It is an estimate, not a bound: it assumes a flat prompt of \cfg{DECISION_PROMPT_TOKENS_ESTIMATE} = 3000 tokens per call and every round at \cfg{DECISION_MAX_TOKENS}, and actual input tokens can exceed that assumption. The hard cap is each experiment's \texttt{budgetUsd}, rounded up per file; these sum to 804 USD across the 42 files. Before each model call the runner checks the spend so far plus that call's worst-case estimate against the remaining budget and stops the experiment with \texttt{BudgetExhausted} if it would exceed it. Neither figure is the amount spent. Actual spend per run is in the \texttt{costUsd} column of \texttt{paper/data/study.csv}.
 % WRITE AFTER DATA: actual total spend, USD per decision, fallback rates.
 
 \section{Limitations}
