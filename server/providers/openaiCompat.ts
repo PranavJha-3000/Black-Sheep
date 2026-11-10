@@ -103,7 +103,8 @@ export async function runOpenAICompatLoop(
       const u = { input_tokens: res.usage?.prompt_tokens ?? 0, output_tokens: res.usage?.completion_tokens ?? 0 };
       usage.input_tokens += u.input_tokens;
       usage.output_tokens += u.output_tokens;
-      costUsd += costOfUsage(res.model ?? req.model, u);
+      // Priced on the requested model: OpenRouter may return dated variants the registry lacks.
+      costUsd += costOfUsage(req.model, u);
 
       const choice = res.choices?.[0];
       if (!choice?.message) return done('error', null, 'response had no choices');
@@ -113,7 +114,7 @@ export async function runOpenAICompatLoop(
       // Parse arguments once; a parse failure is reported back to the model.
       const parsed = calls.map((c) => {
         try {
-          return { c, args: JSON.parse(c.function.arguments) as unknown, bad: false };
+          return { c, args: JSON.parse(c.function.arguments || '{}') as unknown, bad: false };
         } catch {
           return { c, args: null, bad: true };
         }
@@ -127,6 +128,7 @@ export async function runOpenAICompatLoop(
         if (fromText) return done('decided', fromText);
         return done(stopReason === 'length' ? 'max_tokens' : 'no_decision');
       }
+      // Truncated output means truncated tool-call arguments; end honestly rather than loop on them.
       if (stopReason === 'length') return done('max_tokens');
 
       // Out of rounds: research the model asked for could never be reported back.
@@ -137,7 +139,8 @@ export async function runOpenAICompatLoop(
         let output: unknown;
         if (p.bad) {
           output = { error: 'Malformed tool arguments: not valid JSON.' };
-          toolCalls.push({ name: p.c.function.name, input: p.c.function.arguments, output, ok: false, latencyMs: 0 });
+          // submit_decision is never recorded (matches the Anthropic loop).
+          if (p.c.function.name !== SUBMIT_DECISION) toolCalls.push({ name: p.c.function.name, input: p.c.function.arguments, output, ok: false, latencyMs: 0 });
         } else if (p.c.function.name === SUBMIT_DECISION) {
           output = { error: 'Malformed decision: action must be buy|short|close|hold with reasoning and a numeric confidence.' };
         } else {

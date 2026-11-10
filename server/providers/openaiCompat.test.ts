@@ -103,6 +103,60 @@ describe('runOpenAICompatLoop', () => {
     expect(r.costUsd).toBeCloseTo(expected, 10);
   });
 
+  it('prices on the requested model, not the served variant', async () => {
+    const res = reply({ tool_calls: [call('a', 'submit_decision', JSON.stringify(SUBMIT))] });
+    (res.json as { model: string }).model = 'openai/gpt-test-20261110';
+    const r = await runOpenAICompatLoop(fake(res), req(), sleep);
+    expect(r.servedBy).toBe('openai/gpt-test-20261110');
+    expect(r.costUsd).toBeCloseTo(costOfUsage(MODEL, { input_tokens: 1000, output_tokens: 200 }), 10);
+  });
+
+  it('treats empty tool arguments as no arguments', async () => {
+    const chat = fake(
+      reply({ tool_calls: [call('a', 'inspect_portfolio', '')] }),
+      reply({ tool_calls: [call('b', 'submit_decision', JSON.stringify(SUBMIT))] }),
+    );
+    const runTool = vi.fn((): ToolResult => ({ ok: true, output: { ok: 1 } }));
+    const r = await runOpenAICompatLoop(chat, req({ runTool }), sleep);
+    expect(runTool).toHaveBeenCalledWith('inspect_portfolio', {});
+    expect(r.toolCalls[0]).toMatchObject({ name: 'inspect_portfolio', ok: true });
+  });
+
+  it('does not record an unparseable submit_decision in toolCalls', async () => {
+    const chat = fake(
+      reply({ tool_calls: [call('a', 'submit_decision', '{oops')] }),
+      reply({ tool_calls: [call('b', 'submit_decision', JSON.stringify(SUBMIT))] }),
+    );
+    const r = await runOpenAICompatLoop(chat, req(), sleep);
+    expect(r.outcome).toBe('decided');
+    expect(r.toolCalls).toHaveLength(0);
+  });
+
+  it('length finish with tool calls ends as max_tokens', async () => {
+    const chat = fake(reply({ tool_calls: [call('a', 'calculate_risk', '{"tru')] }, 'length'));
+    const r = await runOpenAICompatLoop(chat, req(), sleep);
+    expect(r.outcome).toBe('max_tokens');
+    expect(chat).toHaveBeenCalledTimes(1);
+  });
+
+  it('a text answer with no decision is no_decision', async () => {
+    const r = await runOpenAICompatLoop(fake(reply({ content: 'I am not sure.' }, 'stop')), req(), sleep);
+    expect(r.outcome).toBe('no_decision');
+  });
+
+  it('nudges on the final round', async () => {
+    const chat = fake(
+      reply({ tool_calls: [call('a', 'calculate_risk', '{}')] }),
+      reply({ tool_calls: [call('b', 'calculate_risk', '{}')] }),
+      reply({ tool_calls: [call('c', 'submit_decision', JSON.stringify(SUBMIT))] }),
+    );
+    await runOpenAICompatLoop(chat, req({ maxRounds: 3 }), sleep);
+    const first = chat.mock.calls[1][0] as Sent;
+    const second = chat.mock.calls[2][0] as Sent;
+    expect(first.messages.some((m) => m.content === 'Final round: call submit_decision now.')).toBe(false);
+    expect(second.messages.at(-1)).toEqual({ role: 'user', content: 'Final round: call submit_decision now.' });
+  });
+
   it('round cap ends with round_cap', async () => {
     const chat = fake(...Array.from({ length: 2 }, () => reply({ tool_calls: [call('a', 'calculate_risk', '{}')] })));
     const r = await runOpenAICompatLoop(chat, req({ maxRounds: 2 }), sleep);
