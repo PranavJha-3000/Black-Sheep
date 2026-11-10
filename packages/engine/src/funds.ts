@@ -7,7 +7,7 @@
  */
 
 import { FUND_REGISTRY } from '../../../config/funds';
-import type { ModelId } from '../../../config/models';
+import type { AnthropicModelId } from '../../../config/models';
 import type { RivalPersonality } from './rival';
 
 export interface FundProfile {
@@ -19,7 +19,8 @@ export interface FundProfile {
   personality: RivalPersonality;
   mandate: string;
   strategy: string;
-  model: ModelId;
+  /** The live world is Anthropic-only, so a fund's own model is too. */
+  model: AnthropicModelId;
   /** Largest fraction of available cash one new position may use. */
   maxPositionFraction: number;
   /** The fund decides every N engine ticks... */

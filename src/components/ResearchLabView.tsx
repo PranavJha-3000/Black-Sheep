@@ -27,10 +27,15 @@ const BEHAVIOUR_COLUMNS = [
 /** `mean [lo, hi]`; missing or null stats (old experiments) render as an em dash. */
 const fmtStat = (s: { mean: number | null; ci: [number, number] | null } | null | undefined) =>
   !s || s.mean === null ? '—' : `${fmtNum(s.mean, 2)}${s.ci ? ` [${fmtNum(s.ci[0], 2)}, ${fmtNum(s.ci[1], 2)}]` : ''}`;
-const BRAIN_OPTIONS: { value: string; label: string }[] = [
+const BRAIN_OPTIONS: { value: string; label: string; provider?: string }[] = [
   { value: 'policy', label: 'Policy' },
-  ...Object.entries(MODEL_REGISTRY).map(([id, m]) => ({ value: id, label: m.displayName })),
+  ...Object.entries(MODEL_REGISTRY).map(([id, m]) => ({ value: id, label: m.displayName, provider: m.provider })),
 ];
+/** Model brains grouped by provider for the picker's optgroups. */
+const BRAIN_GROUPS = [
+  { label: 'Anthropic', provider: 'anthropic' },
+  { label: 'OpenRouter', provider: 'openrouter' },
+].map((g) => ({ label: g.label, options: BRAIN_OPTIONS.filter((o) => o.provider === g.provider) }));
 const fmtBrains = (m: Record<string, string>) =>
   Object.keys(m).length ? Object.entries(m).map(([k, b]) => `${FUND_NAME[k] ?? k}: ${brainLabel(b)}`).join(' · ') : 'Deterministic policies';
 const brainLabel = (b: string) => BRAIN_OPTIONS.find((o) => o.value === b)?.label ?? b;
@@ -495,8 +500,13 @@ function CreateExperiment({ onDone }: { onDone: () => void }) {
             <label key={p.key} className="flex items-center justify-between gap-2">
               {p.name}
               <select className={`${input} !w-auto`} aria-label={`Brain for ${p.name}`} value={baseBrains[p.key] ?? 'policy'} onChange={(e) => setBaseBrains((b) => ({ ...b, [p.key]: e.target.value }))}>
-                {BRAIN_OPTIONS.map((o) => (
-                  <option key={o.value} value={o.value}>{o.label}</option>
+                <option value="policy">Policy</option>
+                {BRAIN_GROUPS.map((g) => (
+                  <optgroup key={g.label} label={g.label}>
+                    {g.options.map((o) => (
+                      <option key={o.value} value={o.value}>{o.label}</option>
+                    ))}
+                  </optgroup>
                 ))}
               </select>
             </label>

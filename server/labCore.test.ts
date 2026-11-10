@@ -8,7 +8,8 @@ import type { CreateMessage } from './providers/anthropic';
 import { EXPERIMENT_REPLAY_MAX_DECISIONS, DECISION_MAX_TOKENS, DECISION_PROMPT_TOKENS_ESTIMATE, MAX_TOOL_ROUNDS } from '../config/game';
 
 const ALL = ['sterling-vale', 'halden-whitmore', 'crown-meridian'];
-const KEYED = { providerConfigured: true };
+const KEYED = { providers: new Set(['anthropic', 'openrouter'] as const) };
+const UNKEYED = { providers: new Set<'anthropic' | 'openrouter'>() };
 const body = (over: Record<string, unknown> = {}) => ({
   name: 'Director on/off',
   variable: 'directorMode',
@@ -82,10 +83,23 @@ describe('parseExperimentRequest: model brains and budget', () => {
   });
 
   it('rejects model brains without a provider', () => {
-    expect(parseExperimentRequest(brains(), { providerConfigured: false })).toEqual({ ok: false, error: 'Model brains need a provider key on the server.' });
+    expect(parseExperimentRequest(brains(), UNKEYED)).toEqual({ ok: false, error: 'Model brains need a provider key on the server.' });
     // A model brain set on the base counts too.
     const viaBase = body({ base: { ...body().base, brains: { 'sterling-vale': 'claude-opus-5-5' } }, budgetUsd: 5 });
-    expect(parseExperimentRequest(viaBase, { providerConfigured: false })).toEqual({ ok: false, error: 'Model brains need a provider key on the server.' });
+    expect(parseExperimentRequest(viaBase, UNKEYED)).toEqual({ ok: false, error: 'Model brains need a provider key on the server.' });
+  });
+
+  it('rejects an openrouter brain without OPENROUTER key', () => {
+    const r = parseExperimentRequest(brains({ values: [{}, { 'crown-meridian': 'x-ai/grok-4.7' }] }), { providers: new Set(['anthropic'] as const) });
+    expect(r).toEqual({ ok: false, error: 'No key on the server for provider openrouter.' });
+    // The anthropic-only spec still passes with only the anthropic key.
+    expect(parseExperimentRequest(brains(), { providers: new Set(['anthropic'] as const) }).ok).toBe(true);
+  });
+
+  it('accepts mixed providers when both keys are present', () => {
+    const mixed = brains({ values: [{}, { 'crown-meridian': 'claude-haiku-5-5', 'sterling-vale': 'google/gemini-3.8-flash' }] });
+    expect(parseExperimentRequest(mixed, KEYED).ok).toBe(true);
+    expect(parseExperimentRequest(mixed, { providers: new Set(['openrouter'] as const) })).toEqual({ ok: false, error: 'No key on the server for provider anthropic.' });
   });
 
   it('requires budgetUsd for model brains', () => {
@@ -108,10 +122,10 @@ describe('parseExperimentRequest: model brains and budget', () => {
   });
 
   it('policy-only spec needs no budget', () => {
-    const r = parseExperimentRequest(body(), { providerConfigured: false });
+    const r = parseExperimentRequest(body(), UNKEYED);
     expect(r).toEqual({ ok: true, spec: body() });
     // An all-policy brains map is policy-only as well.
-    expect(parseExperimentRequest(body({ base: { ...body().base, brains: { 'crown-meridian': 'policy' } } }), { providerConfigured: false }).ok).toBe(true);
+    expect(parseExperimentRequest(body({ base: { ...body().base, brains: { 'crown-meridian': 'policy' } } }), UNKEYED).ok).toBe(true);
   });
 });
 
@@ -150,7 +164,7 @@ describe('runExperimentSpec', () => {
     if (!parsed.ok) throw new Error(parsed.error);
     const plain = await runExperimentSpec(parsed.spec, async () => {});
     const seen: string[] = [];
-    const sunk = await runExperimentSpec(parsed.spec, async () => {}, { create: null, onDecision: async (_a, _s, d) => void seen.push(d.source) });
+    const sunk = await runExperimentSpec(parsed.spec, async () => {}, { clients: { anthropic: null, openrouter: null }, onDecision: async (_a, _s, d) => void seen.push(d.source) });
     // Same digests (and everything else) as the sync policy world.
     expect(sunk).toEqual(plain);
     expect(seen.length).toBeGreaterThan(0);
@@ -176,7 +190,7 @@ describe('runExperimentSpec', () => {
   it('runs model brains through the injected provider and reports cost and estimate', async () => {
     create.mockClear();
     const seen: string[] = [];
-    const r = await runExperimentSpec(modelSpec(25), async () => {}, { create, onDecision: async (arm, _seed, d) => void seen.push(`${arm}:${d.source}`) });
+    const r = await runExperimentSpec(modelSpec(25), async () => {}, { clients: { anthropic: create, openrouter: null }, onDecision: async (arm, _seed, d) => void seen.push(`${arm}:${d.source}`) });
     expect(create.mock.calls.length).toBeGreaterThan(0);
     expect(r.costUsd).toBeCloseTo(create.mock.calls.length * 0.0002, 10);
     expect(r.estimateUsd).toBeGreaterThan(r.costUsd);
@@ -192,7 +206,7 @@ describe('runExperimentSpec', () => {
     const seen: unknown[] = [];
     // Room for exactly one worst-case call, so the second must be refused.
     const budget = estimateCallCostUsd('claude-haiku-5-5', MAX_TOOL_ROUNDS, DECISION_MAX_TOKENS, DECISION_PROMPT_TOKENS_ESTIMATE);
-    const err = await runExperimentSpec(modelSpec(budget), async () => {}, { create, onDecision: async (_a, _s, d) => void seen.push(d) }).catch((e: unknown) => e);
+    const err = await runExperimentSpec(modelSpec(budget), async () => {}, { clients: { anthropic: create, openrouter: null }, onDecision: async (_a, _s, d) => void seen.push(d) }).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(BudgetExhausted);
     expect((err as Error).message).toBe('budget exhausted at $0.00');
     expect(create).toHaveBeenCalledTimes(1);
@@ -200,7 +214,7 @@ describe('runExperimentSpec', () => {
   });
 
   it('refuses a model-backed spec with no provider', async () => {
-    await expect(runExperimentSpec(modelSpec(5), async () => {}, { create: null })).rejects.toThrow('Model brains need a provider key on the server.');
+    await expect(runExperimentSpec(modelSpec(5), async () => {}, { clients: { anthropic: null, openrouter: null } })).rejects.toThrow('Model brains need a provider key on the server.');
   });
 });
 
@@ -322,7 +336,7 @@ describe('dryRunExperiment', () => {
     const ok = dryRunExperiment(modelBody(), KEYED);
     expect(ok.ok && ok.estimateUsd).toBeGreaterThan(0);
     expect(dryRunExperiment(body(), KEYED)).toEqual({ ok: true, estimateUsd: 0 });
-    expect(dryRunExperiment(modelBody(), { providerConfigured: false })).toEqual({ ok: false, error: 'Model brains need a provider key on the server.' });
+    expect(dryRunExperiment(modelBody(), UNKEYED)).toEqual({ ok: false, error: 'Model brains need a provider key on the server.' });
     expect(dryRunExperiment(body({ name: '' }), KEYED).ok).toBe(false);
   });
 });

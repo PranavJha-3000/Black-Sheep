@@ -24,7 +24,7 @@ import {
 import type { Behaviour } from '@black-sheep/engine/behaviour';
 import { FUND_PROFILES, getFundProfile } from '@black-sheep/engine/funds';
 import { seriesMetrics } from '@black-sheep/engine/metrics';
-import { MODEL_REGISTRY } from '../config/models';
+import { MODEL_REGISTRY, type ModelProvider } from '../config/models';
 import {
   EXPERIMENT_MAX_ARMS,
   EXPERIMENT_MAX_BUDGET_USD,
@@ -35,8 +35,7 @@ import {
   SNAPSHOT_EVERY_TICKS,
   STARTING_CAPITAL,
 } from '../config/game';
-import { estimateExperimentCostUsd, makeExperimentDecide, type ExperimentBudget } from './labBrain';
-import type { CreateMessage } from './providers/anthropic';
+import { estimateExperimentCostUsd, makeExperimentDecide, type ExperimentBudget, type ProviderClients } from './labBrain';
 
 /**
  * labCore — PURE Research Lab rules (VISION §10, D-032, D-033): validate an
@@ -125,13 +124,21 @@ function checkBase(x: unknown): Check<ArmConfig> {
   return { ok: true, value: config };
 }
 
+/** The model providers whose key is set in `env` (keys themselves never leave the server). */
+export function configuredProviders(env: Record<string, string | undefined>): Set<ModelProvider> {
+  const providers = new Set<ModelProvider>();
+  if (env.ANTHROPIC_API_KEY) providers.add('anthropic');
+  if (env.OPENROUTER_API_KEY) providers.add('openrouter');
+  return providers;
+}
+
 /**
  * Validate an untrusted create request. Everything a run needs is checked here, before anything is stored.
- * `providerConfigured`: whether the server holds a model provider key (model brains need one).
+ * `providers`: the model providers the server holds a key for (each model brain needs its provider's).
  */
 export function parseExperimentRequest(
   body: unknown,
-  opts: { providerConfigured: boolean },
+  opts: { providers: ReadonlySet<ModelProvider> },
 ): { ok: true; spec: ExperimentSpec } | { ok: false; error: string } {
   if (!body || typeof body !== 'object') return fail('Request body must be a JSON object.');
   const b = body as Record<string, unknown>;
@@ -177,7 +184,12 @@ export function parseExperimentRequest(
   const spec: ExperimentSpec = { name, base: base.value, variable, values, seeds: seeds as number[] };
   if (budgetUsd !== null) spec.budgetUsd = budgetUsd;
   if (hasModelBrains(spec)) {
-    if (!opts.providerConfigured) return fail('Model brains need a provider key on the server.');
+    if (opts.providers.size === 0) return fail('Model brains need a provider key on the server.');
+    const missing = expandArms(spec)
+      .flatMap((a) => armModelFunds(a.config))
+      .map((f) => MODEL_REGISTRY[f.model].provider)
+      .find((p) => !opts.providers.has(p));
+    if (missing) return fail(`No key on the server for provider ${missing}.`);
     if (budgetUsd === null) return fail(`budgetUsd is required when any fund uses a model (max $${EXPERIMENT_MAX_BUDGET_USD}).`);
   }
   return { ok: true, spec };
@@ -195,7 +207,7 @@ export function parseNameFilter(q: unknown): { ok: true; name: string | null } |
 /** Validate a create request and price it (worst case) without storing anything: the form's live estimate. */
 export function dryRunExperiment(
   body: unknown,
-  opts: { providerConfigured: boolean },
+  opts: { providers: ReadonlySet<ModelProvider> },
 ): { ok: true; estimateUsd: number } | { ok: false; error: string } {
   const parsed = parseExperimentRequest(body, opts);
   return parsed.ok ? { ok: true, estimateUsd: estimateExperimentCostUsd(parsed.spec) } : parsed;
@@ -251,22 +263,22 @@ const hasModelBrains = (spec: ExperimentSpec) => expandArms(spec).some((a) => ar
 /**
  * Run every arm on every seed; `yieldFn` runs between runs so the server's event loop stays responsive.
  * Arms with no model brain and no decision sink run the sync policy world; with a sink they run the async
- * world (identical digests) so every policy decision is reported too. Model arms call `deps.create`
+ * world (identical digests) so every policy decision is reported too. Model arms call `deps.clients`
  * against one budget shared by the whole experiment; a BudgetExhausted error ends the experiment.
  */
 export async function runExperimentSpec(
   spec: ExperimentSpec,
   yieldFn: () => Promise<void>,
-  deps?: { create: CreateMessage | null; onDecision?: (arm: string, seed: number, r: DecisionRecord) => Promise<void>; budget?: ExperimentBudget },
+  deps?: { clients: ProviderClients; onDecision?: (arm: string, seed: number, r: DecisionRecord) => Promise<void>; budget?: ExperimentBudget },
 ): Promise<ExperimentResult> {
   const estimateUsd = estimateExperimentCostUsd(spec);
-  const create = deps?.create ?? null;
-  if (hasModelBrains(spec) && !create) throw new Error('Model brains need a provider key on the server.');
+  const clients: ProviderClients = deps?.clients ?? { anthropic: null, openrouter: null };
+  if (hasModelBrains(spec) && !clients.anthropic && !clients.openrouter) throw new Error('Model brains need a provider key on the server.');
   // A caller-owned budget lets the caller see the spend even when the run throws.
   const budget: ExperimentBudget = deps?.budget ?? { limitUsd: spec.budgetUsd ?? 0, spentUsd: 0 };
   const onDecision = deps?.onDecision;
   // Fresh per run (the gate state is per world). Policy funds never reach `decide`, so a policy-only arm needs no provider.
-  const decideFor = (): DecideFn => (create ? makeExperimentDecide(create, budget) : () => Promise.reject(new Error('Model brains need a provider key on the server.')));
+  const decideFor = (): DecideFn => makeExperimentDecide(clients, budget);
   const arms: { label: string; runs: RunResult[] }[] = [];
   for (const arm of expandArms(spec)) {
     const runs: RunResult[] = [];

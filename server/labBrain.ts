@@ -6,7 +6,8 @@ import type { RivalDecisionInput } from '@black-sheep/engine/rival';
 import { MODEL_REGISTRY, type ModelId } from '../config/models';
 import { DECISION_MAX_TOKENS, DECISION_PROMPT_TOKENS_ESTIMATE, MAX_TOOL_ROUNDS } from '../config/game';
 import { estimateCallCostUsd } from './budget';
-import { runDecisionLoop, type CreateMessage } from './providers/anthropic';
+import { runDecisionLoop, type CreateMessage, type DecisionRequest } from './providers/anthropic';
+import { runOpenAICompatLoop, type ChatFetch } from './providers/openaiCompat';
 
 /**
  * labBrain — model-backed fund brains for Research Lab experiments (D-032).
@@ -43,8 +44,14 @@ export function estimateExperimentCostUsd(spec: ExperimentSpec): number {
   return total;
 }
 
+/** One client per provider; null when the server holds no key for it. */
+export interface ProviderClients {
+  anthropic: CreateMessage | null;
+  openrouter: ChatFetch | null;
+}
+
 /** A fresh closure per run: `lastLlmInput` is per fund within one world. */
-export function makeExperimentDecide(create: CreateMessage, budget: ExperimentBudget): DecideFn {
+export function makeExperimentDecide(clients: ProviderClients, budget: ExperimentBudget): DecideFn {
   const lastLlmInput = new Map<string, RivalDecisionInput>();
   return async ({ fund, input }) => {
     const key = fund.profile.key;
@@ -58,8 +65,7 @@ export function makeExperimentDecide(create: CreateMessage, budget: ExperimentBu
     const model = fund.brain;
     if (budget.spentUsd + callEstimateUsd(model) > budget.limitUsd) throw new BudgetExhausted(budget.spentUsd);
 
-    // runDecisionLoop never throws; every exit carries the cost actually incurred.
-    const loop = await runDecisionLoop(create, {
+    const req: DecisionRequest = {
       model,
       effort: MODEL_REGISTRY[model].effort,
       system: buildFundSystemPrompt(fund.profile),
@@ -67,7 +73,16 @@ export function makeExperimentDecide(create: CreateMessage, budget: ExperimentBu
       maxRounds: MAX_TOOL_ROUNDS,
       maxTokens: DECISION_MAX_TOKENS,
       runTool: (name, args) => runFundTool(name, args, input, fund.profile),
-    });
+    };
+    const { provider } = MODEL_REGISTRY[model];
+    // Defensive: parseExperimentRequest already rejects a brain whose provider has no key.
+    const noKey = (): never => {
+      throw new Error(`No key on the server for provider ${provider}.`);
+    };
+    // Both loops never throw; every exit carries the cost actually incurred.
+    const loop = provider === 'openrouter'
+      ? await runOpenAICompatLoop(clients.openrouter ?? noKey(), req)
+      : await runDecisionLoop(clients.anthropic ?? noKey(), req);
     budget.spentUsd += loop.costUsd;
     lastLlmInput.set(key, input);
 

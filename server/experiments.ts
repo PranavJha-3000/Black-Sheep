@@ -1,8 +1,9 @@
 import { experimentManifest, type DecisionRecord } from '@black-sheep/engine/experiment';
 import { prisma } from './db';
-import type { ExperimentBudget } from './labBrain';
-import { parseExperimentRequest, runExperimentSpec } from './labCore';
-import { anthropicCreate, type CreateMessage } from './providers/anthropic';
+import type { ExperimentBudget, ProviderClients } from './labBrain';
+import { configuredProviders, parseExperimentRequest, runExperimentSpec } from './labCore';
+import { anthropicCreate } from './providers/anthropic';
+import { openaiCompatFetch } from './providers/openaiCompat';
 import { EXPERIMENT_POLL_MS } from '../config/game';
 
 /**
@@ -13,8 +14,13 @@ import { EXPERIMENT_POLL_MS } from '../config/game';
  */
 
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY ?? '';
-/** The provider call for model brains, or null when no key is configured (as in server/world.ts). */
-const createMessage: CreateMessage | null = ANTHROPIC_API_KEY ? anthropicCreate(ANTHROPIC_API_KEY) : null;
+const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY ?? '';
+/** One client per provider for model brains, null where no key is configured (as in server/world.ts). */
+const clients: ProviderClients = {
+  anthropic: ANTHROPIC_API_KEY ? anthropicCreate(ANTHROPIC_API_KEY) : null,
+  openrouter: OPENROUTER_API_KEY ? openaiCompatFetch('https://openrouter.ai/api/v1', OPENROUTER_API_KEY) : null,
+};
+const providers = configuredProviders(process.env);
 
 let busy = false;
 
@@ -91,10 +97,10 @@ export async function runNextExperiment(): Promise<boolean> {
     };
     try {
       // Re-validated: the stored spec is data, and the limits may have changed since it was queued.
-      const parsed = parseExperimentRequest(JSON.parse(next.specJson), { providerConfigured: createMessage !== null });
+      const parsed = parseExperimentRequest(JSON.parse(next.specJson), { providers });
       if (!parsed.ok) throw new Error(parsed.error);
       budget.limitUsd = parsed.spec.budgetUsd ?? 0;
-      const result = await runExperimentSpec(parsed.spec, yieldToEventLoop, { create: createMessage, onDecision, budget });
+      const result = await runExperimentSpec(parsed.spec, yieldToEventLoop, { clients, onDecision, budget });
       await flush();
       await prisma.experiment.update({
         where: { id: next.id },

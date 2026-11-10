@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { experimentManifest } from '@black-sheep/engine/experiment';
 import { prisma } from './db';
 import { wrap } from './auth';
-import { buildExperimentDetail, buildExperimentSummary, buildRunReplay, checkLabToken, decisionFromRow, dryRunExperiment, findRun, parseExperimentRequest, parseNameFilter } from './labCore';
+import { buildExperimentDetail, buildExperimentSummary, buildRunReplay, checkLabToken, configuredProviders, decisionFromRow, dryRunExperiment, findRun, parseExperimentRequest, parseNameFilter } from './labCore';
 import { EXPERIMENT_REPLAY_MAX_DECISIONS } from '../config/game';
 import { makeLeaderboardCache } from './leaderboardCore';
 import { parseFundId } from './observerCore';
@@ -104,15 +104,15 @@ labRouter.post(
       res.status(401).json({ error: 'A valid lab admin token is required to create experiments.' });
       return;
     }
-    const providerConfigured = Boolean(process.env.ANTHROPIC_API_KEY);
+    const providers = configuredProviders(process.env);
     // Dry run: same auth and validation, returns the worst-case estimate and stores nothing.
     if (req.query.dryRun === '1') {
-      const dry = dryRunExperiment(req.body, { providerConfigured });
+      const dry = dryRunExperiment(req.body, { providers });
       if (!dry.ok) res.status(400).json({ error: dry.error });
       else res.json({ estimateUsd: dry.estimateUsd });
       return;
     }
-    const parsed = parseExperimentRequest(req.body, { providerConfigured });
+    const parsed = parseExperimentRequest(req.body, { providers });
     if (!parsed.ok) {
       res.status(400).json({ error: parsed.error });
       return;

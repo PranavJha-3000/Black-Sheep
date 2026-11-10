@@ -1,6 +1,10 @@
 import type { ExperimentSpec } from '@black-sheep/engine/experiment';
 import { EXPERIMENT_MAX_BUDGET_USD } from '../config/game';
+import { MODEL_REGISTRY } from '../config/models';
 import { parseExperimentRequest } from './labCore';
+
+/** The study is checked as if every provider had a key. */
+const ALL_PROVIDERS = new Set(Object.values(MODEL_REGISTRY).map((m) => m.provider));
 
 /**
  * studyPlan — PURE guard for the pre-registered study (paper/study/*.json).
@@ -16,7 +20,7 @@ export function checkStudyPlan(
   const names = new Set<string>();
   for (const { path, spec: raw } of files) {
     const fail = (msg: string) => ({ ok: false as const, error: `${path}: ${msg}` });
-    const parsed = parseExperimentRequest(raw, { providerConfigured: true });
+    const parsed = parseExperimentRequest(raw, { providers: ALL_PROVIDERS });
     if (!parsed.ok) return fail(parsed.error);
     const spec = parsed.spec;
     if (names.has(spec.name)) return fail(`duplicate experiment name ${spec.name}.`);
