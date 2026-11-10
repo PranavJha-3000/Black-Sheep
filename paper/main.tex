@@ -1,0 +1,168 @@
+% Black Sheep paper skeleton. Section order follows arXiv 2610.22319.
+% Environment, Agents & brains, Protocol, Reproducibility are written from the code (constant names are config names).
+% Results, Behaviour and Cost take generated tables/figures from `npm run paper:export`; narrative marked WRITE AFTER DATA.
+% Figures use the svg package: compile with `pdflatex -shell-escape` and Inkscape installed.
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{svg}
+\usepackage{amsmath}
+\usepackage{url}
+\usepackage[hidelinks]{hyperref}
+
+% \cfg{NAME_WITH_UNDERSCORES}: a config constant, verbatim.
+\newcommand{\cfg}[1]{\texttt{\detokenize{#1}}}
+% \gentable{H1}: the exporter's table, if the study has run.
+\newcommand{\gentable}[1]{\IfFileExists{tables/#1.tex}{\input{tables/#1.tex}}{\par\emph{[Table #1 not generated yet.]}\par}}
+% \genfig{H1-forest}{caption}: the exporter's SVG figure, if the study has run.
+\newcommand{\genfig}[2]{\IfFileExists{figures/#1.svg}{\begin{figure}[ht]\centering\includesvg[width=0.9\linewidth]{figures/#1}\caption{#2}\label{fig:#1}\end{figure}}{\par\emph{[Figure #1 not generated yet.]}\par}}
+
+\title{Black Sheep: a controlled laboratory for AI hedge funds}
+\author{Black Sheep project}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Black Sheep is a simulated market in which AI hedge funds trade against each other and against scripted events. We use its experiment mode to run a pre-registered study of four questions: whether a language-model brain beats the deterministic policy it replaces (H1), whether in-world memory changes returns (H2), whether a rule-based world Director changes returns (H3), and what the model arms cost per percentage point of return (H4). Every comparison is paired by seed. % WRITE AFTER DATA: one sentence per headline result.
+\end{abstract}
+
+\section{Introduction}
+Long-horizon evaluations of agents need worlds that are repeatable, instrumented and cheap enough to rerun. Emergence World~\cite{emergenceworld} and napole0n.ai~\cite{napoleon} motivate the scope of this work, and the section order follows~\cite{arxiv2610}. Black Sheep fixes the market, the events and the funds, varies one thing at a time, and runs every arm on the same seeds so that arms are paired run for run.
+
+% WRITE AFTER DATA: motivation, contributions, one paragraph.
+
+\section{Environment}
+\paragraph{Market.} A run is one independent, headless world simulated by the same engine calls, in the same order, as the live world. Every fund starts with \cfg{STARTING_CAPITAL} = 10{,}000{,}000 USD. Prices mean-revert toward the previous close at \cfg{MEAN_REVERSION} = 0.02 per tick; trades move prices by a square-root impact model with \cfg{IMPACT_COEFF} = 0.1, capped at \cfg{MAX_IMPACT} = 0.08 per trade. Shorts reserve \cfg{INITIAL_MARGIN_RATE} = 0.5 of notional, and a fund is liquidated when its whole NAV falls below \cfg{MAINTENANCE_MARGIN_RATE} = 0.25 of its shorts' current value (liquidation rule version \cfg{LIQUIDATION_RULE_VERSION} = 2).
+
+\paragraph{Events.} The first scripted event fires at tick \cfg{EVENT_FIRST_FIRE_TICK} = 15, then every \cfg{EVENT_FIRE_DELAY_MIN} = 15 ticks plus a random extra in $[0,\cfg{EVENT_FIRE_DELAY_JITTER})$ with \cfg{EVENT_FIRE_DELAY_JITTER} = 6; an ambient event fires with probability \cfg{EVENT_AMBIENT_CHANCE} = 0.14 per tick. The most recent \cfg{EVENT_BUFFER} = 60 events are kept visible to funds.
+
+\paragraph{Director.} With \texttt{directorMode} = \texttt{rule} the Director considers an intervention every \cfg{DIRECTOR_EVERY_TICKS} = 10 ticks at slot offset \cfg{DIRECTOR_OFFSET} = 9, with a cooldown of \cfg{DIRECTOR_COOLDOWN_TICKS} = 60 ticks. It does not act when the mean absolute change from anchor exceeds \cfg{DIRECTOR_HOT_ABS_CHANGE} = 0.14 or when a major event (impact at least \cfg{DIRECTOR_MAJOR_EVENT_PCT} = 5 percent) occurred in the last \cfg{DIRECTOR_QUIET_TICKS} = 10 ticks; a quiet market whose mean change is at least \cfg{DIRECTOR_RUNUP_CHANGE} = 0.035 receives a macro tightening event. It can only fire validated catalogue sector or macro events. With \texttt{directorMode} = \texttt{none} it is off.
+
+\paragraph{Observation.} NAV is recorded every \cfg{SNAPSHOT_EVERY_TICKS} = 3 ticks.
+
+\section{Agents and brains}
+\paragraph{Funds.} Three funds are present in every run (\texttt{FUND\_REGISTRY}, \texttt{config/funds.ts}): \texttt{sterling-vale} (cautious, \texttt{maxPositionFraction} 0.12, offset 0), \texttt{halden-whitmore} (aggressive, 0.20, offset 3) and \texttt{crown-meridian} (quant, 0.15, offset 6). Each decides every \texttt{decisionEveryTicks} = 10 ticks in its own slot. A proposal passes through \texttt{enforceRiskLimit}, which clamps or refuses it against the fund's \texttt{maxPositionFraction}.
+
+\paragraph{Policy brain.} The default brain is a deterministic per-personality policy (\texttt{decideByPolicy}), with tuning constants such as \cfg{POLICY_MAX_GROSS_LEVERAGE} = 1.5 and \cfg{POLICY_QUANT_STOP_LOSS} = 0.12.
+
+\paragraph{Model brains.} In the study only the subject fund, \texttt{crown-meridian}, has a model brain; the other two stay on their policies. The models are those in \texttt{MODEL\_REGISTRY} (\texttt{config/models.ts}), priced in USD per million tokens (input/output): Claude Haiku 5.5 at 0.1/0.5, Claude Sonnet 5.5 at 2/10 and Claude Opus 5.5 at 4/20, each with \texttt{effort} = \texttt{low}. A model decision runs a bounded tool loop of at most \cfg{MAX_TOOL_ROUNDS} = 4 rounds with \cfg{DECISION_MAX_TOKENS} = 4096 tokens per round, a \cfg{LLM_TIMEOUT_MS} = 90{,}000 ms request timeout and \cfg{LLM_MAX_RETRIES} = 1 retry. Prompts and tools are the live world's (\texttt{buildFundSystemPrompt}, \texttt{buildRivalUserMessage}, \texttt{runFundTool}).
+
+\paragraph{Reconsider gate.} A model is called only when \texttt{shouldRivalReconsider} reports a change since its last model input: this is its first decision, or a new event appeared, or any ticker's net flow moved by more than 250{,}000 USD, or the fund's number of positions changed. Otherwise the fund takes its policy decision for that slot (source \texttt{policy}, cost zero).
+
+\paragraph{Budget metering and fallback.} Each experiment has one hard budget. Before each call, \texttt{makeExperimentDecide} adds the worst-case cost of a call (every round at \cfg{DECISION_MAX_TOKENS}, prompt estimate \cfg{DECISION_PROMPT_TOKENS_ESTIMATE} = 3000 tokens) to the spend so far and stops the experiment with \texttt{BudgetExhausted} if that would exceed the limit. If the loop returns no valid decision, the fund takes its policy decision and the record is marked \texttt{fallback}; the fallback rate is fallbacks over model-attempted decisions. Spend is recorded after every paid call.
+
+\paragraph{Memory.} \texttt{memory} has four modes: \texttt{none}, \texttt{episodic}, \texttt{reflective}, \texttt{full}. After each tick's decisions, episodes and reflections are written into the fund's in-world memory (model-backed funds only; policy funds have none). A reflection is written once \cfg{MEMORY_REFLECT_EVERY_CLOSES} = 3 closed trades accumulate; \cfg{MEMORY_PROMPT_ENTRIES} = 6 memories appear in the prompt, and \texttt{recall\_memory} returns \cfg{MEMORY_RECALL_DEFAULT} = 10 by default and at most \cfg{MEMORY_RECALL_MAX} = 20.
+
+\section{Protocol}
+The study was pre-registered in \texttt{paper/PREREGISTRATION.md}, committed as \texttt{9b18473} before any run, and amended once, before any run, in commit \texttt{adc4636} (Amendment~1). Deviations from this protocol are logged in Appendix~\ref{app:repro}.
+
+\paragraph{Design.} Every run has the three funds above, 500 ticks, \texttt{decisionEveryTicks} = 10, \texttt{directorMode} = \texttt{rule} (unless it is the variable) and \texttt{memory} = \texttt{none} (unless it is the variable). Seeds are 1--20. Each experiment varies one variable across arms on identical seeds.
+\begin{itemize}
+\item \textbf{H1 (cross-model).} Arms: all-policy versus one model, as a separate pair per model (Haiku 5.5, Sonnet 5.5, Opus 5.5) on \texttt{crown-meridian}. Baseline: the all-policy arm.
+\item \textbf{H2 (memory).} Subject on Haiku 5.5; arms \texttt{none}, \texttt{episodic}, \texttt{reflective}, \texttt{full}. Baseline: \texttt{none}.
+\item \textbf{H3 (Director).} Subject on Haiku 5.5; \texttt{directorMode} \texttt{none} versus \texttt{rule}.
+\item \textbf{H4 (cost versus quality).} Derived from H1: see Amendment~1 below.
+\end{itemize}
+
+\paragraph{Block layout.} Each experiment must fit the \cfg{EXPERIMENT_MAX_BUDGET_USD} = 25 USD per-experiment cap at worst case, so seeds are split into blocks (Table~\ref{tab:blocks}). Seeds and all other settings are unchanged by blocking.
+\begin{table}[ht]
+\centering
+\begin{tabular}{lrrr}
+\toprule
+Experiments & Block size & Files & Worst case per file (USD) \\
+\midrule
+H1 Haiku & 5 seeds & 4 & 2.96 \\
+H1 Sonnet & 2 seeds & 10 & 23.70 \\
+H1 Opus & 1 seed & 20 & 23.70 \\
+H2 memory & 5 seeds & 4 & 11.85 \\
+H3 Director & 5 seeds & 4 & 5.92 \\
+\bottomrule
+\end{tabular}
+\caption{Pre-registered block layout (42 experiments).}
+\label{tab:blocks}
+\end{table}
+
+\paragraph{Metrics.} The primary metric is the paired difference in total return, in percentage points, against the hypothesis baseline. Total return is (final NAV $-$ \cfg{STARTING_CAPITAL}) / \cfg{STARTING_CAPITAL}. Secondary metrics:
+\begin{itemize}
+\item \emph{Max drawdown}: the largest peak-to-trough fall of NAV, as a fraction.
+\item \emph{Sharpe}: the mean of per-snapshot NAV returns divided by their sample standard deviation, where a return is $\mathrm{NAV}_i/\mathrm{NAV}_{i-1}-1$ between consecutive snapshots (every 3 ticks). There is no risk-free rate and no annualisation, because the simulation has no calendar. It is null with fewer than two returns or zero volatility.
+\item \emph{Survival}: the fund was not liquidated.
+\item \emph{Fallback rate} and \emph{USD per decision}.
+\end{itemize}
+Five behaviour metrics are computed per fund per run and averaged over seeds with a bootstrap 95\% CI:
+\begin{itemize}
+\item \emph{actionEntropy}: Shannon entropy of the counts of buy, short, close and hold over all decisions, divided by $\log_2 4$; 0 means one action only, 1 means uniform.
+\item \emph{riskCompliance}: the share of non-hold proposals that \texttt{enforceRiskLimit} left unchanged; a proposal the limit refused counts as non-compliant.
+\item \emph{repeatedErrorRate}: of the closes with negative realised P\&L on ticker $T$, the share followed by a new open on $T$ in the same direction within \cfg{BEHAVIOUR_REPEAT_WINDOW_TICKS} = 50 ticks.
+\item \emph{shockDeRisk}: the mean over shocks of $\mathrm{gross}(t)-\mathrm{gross}(t+30)$, where a shock is an event with absolute price impact of at least \cfg{BEHAVIOUR_SHOCK_MIN_IMPACT_PCT} = 5 percent, the window is \cfg{BEHAVIOUR_SHOCK_WINDOW_TICKS} = 30 ticks, and gross is the sum of absolute position notional divided by NAV times 100, sampled at the NAV cadence. Positive means exposure was cut; shocks whose window runs past the end are skipped.
+\item \emph{tradeRate}: trades divided by decisions.
+\end{itemize}
+Each is null when its denominator is empty.
+
+\paragraph{Statistics.} Paired percentile bootstrap 95\% CI of the mean (2000 iterations, seeded), exact two-sided sign test with ties dropped, Holm correction within each hypothesis, $\alpha=0.05$.
+
+\paragraph{Exclusions.} None. Every finished experiment is reported; failed ones are listed with their error (\texttt{paper/data/failed.csv}).
+
+\paragraph{Amendment 1.} \emph{H4 statistic}: for each H1 model, the mean paired return difference versus the policy arm (percentage points) divided by the model arm's mean cost per run (USD), with a percentile bootstrap CI over seed pairs resampling (difference, cost) together (2000 iterations, seed 1); resamples with mean cost 0 are dropped, and H4 is reported as undefined if the arm's mean cost is 0. H4 is descriptive: no sign test or Holm correction. \emph{Resubmission}: a failed experiment may be resubmitted under the same name; per name only the newest finished experiment (highest id) counts, older finished duplicates are ignored, and every failed experiment stays listed.
+
+\section{Results}
+\subsection{H1: cross-model}
+\gentable{H1}
+\genfig{H1-forest}{H1: paired return difference versus the all-policy arm, with 95\% CI.}
+\genfig{H1-returns}{H1: mean NAV path per arm.}
+% WRITE AFTER DATA
+
+\subsection{H2: memory}
+\gentable{H2}
+\genfig{H2-forest}{H2: paired return difference versus \texttt{memory=none}, with 95\% CI.}
+% WRITE AFTER DATA
+
+\subsection{H3: Director}
+\gentable{H3}
+\genfig{H3-forest}{H3: paired return difference versus \texttt{directorMode=none}, with 95\% CI.}
+% WRITE AFTER DATA
+
+\subsection{H4: cost versus quality}
+\gentable{H4}
+% WRITE AFTER DATA
+
+\section{Behaviour and case studies}
+% Behaviour metrics per arm come from paper/data/study.csv (columns behaviour_*).
+% WRITE AFTER DATA: behaviour comparison across arms and two or three replayed case studies.
+
+\section{Cost}
+The study's budget ceiling is the worst-case dry-run total printed by \texttt{npm run study:run}: 793.92 USD over 42 experiments. This is a ceiling that each call is reserved against, not the amount spent. Actual spend per run is in the \texttt{costUsd} column of \texttt{paper/data/study.csv}.
+% WRITE AFTER DATA: actual total spend, USD per decision, fallback rates.
+
+\section{Limitations}
+\begin{itemize}
+\item One simulated market and one subject fund (\texttt{crown-meridian}); results need not transfer to other funds or markets.
+\item 20 seeds per hypothesis; confidence intervals are wide for small effects. Behaviour metrics are null for runs without the relevant events.
+\item Sharpe is per snapshot, unannualised, and has no risk-free rate; it is not comparable to published Sharpe ratios.
+\item Run cost is attributed to the subject fund, which is exact only because each arm has one model fund.
+\item Models are called at \texttt{effort} = \texttt{low} with a four-round tool budget and a reconsider gate that skips calls when the world is quiet.
+\end{itemize}
+% WRITE AFTER DATA: add limitations observed in the data.
+
+\section{Responsible use}
+The simulation uses fictional companies and no real market data, and results do not support claims about real-money trading. Model calls are made by the server, never the browser, under a hard per-experiment budget.
+% WRITE AFTER DATA: add anything observed.
+
+\bibliographystyle{plain}
+\bibliography{refs}
+
+\appendix
+\section{Reproducibility}\label{app:repro}
+\paragraph{Pipeline.} \texttt{npm run study:run} validates the specs in \texttt{paper/study/*.json} against the lab's request rules, prints the worst-case cost per file and in total, and refuses to run unless the pre-registration and every spec are committed and unmodified. Only with \texttt{--confirm} does it submit them, resumably by name. \texttt{npm run paper:export} then reads every finished \texttt{study:*} experiment from the database and writes \texttt{paper/data/study.csv}, \texttt{paper/data/failed.csv}, \texttt{paper/tables/H*.tex} and \texttt{paper/figures/*.svg}.
+
+\paragraph{Determinism.} A policy run is determined by its (arm, seed) pair: the market RNG is a seeded \texttt{mulberry32} stream and the run digest hashes prices, NAVs and decisions only. Experiment manifests carry a \texttt{configHash} and a \texttt{worldConstantsHash} over \texttt{config/game.ts}; every generated table and figure starts with a provenance tag listing the experiment ids and config hashes. Model calls are not deterministic, so model arms are reproducible in design, not in outcome.
+
+\paragraph{Commits.} Pre-registration: \texttt{9b18473}. Amendment~1: \texttt{adc4636}.
+
+\paragraph{Deviations.}
+% WRITE AFTER DATA: log every deviation from the pre-registration here, or state that there were none.
+
+\end{document}
