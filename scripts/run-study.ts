@@ -60,18 +60,22 @@ const stop = (msg: string): never => {
 };
 
 // Resume: look up every name first; anything already queued, running or done is not paid for again.
-const existing: { name: string; id: number; status: string }[] = [];
+const existing: { name: string; id: number; status: string; configHash: string | null }[] = [];
 for (const f of files) {
   const name = String((f.spec as { name?: unknown }).name);
   const res = await fetch(`${api}?name=${encodeURIComponent(name)}`, { signal: AbortSignal.timeout(TIMEOUT_MS) }).catch((err: Error) =>
     stop(`${f.path}: lookup failed (${err.message}).`),
   );
   if (!res.ok) stop(`${f.path}: lookup HTTP ${res.status} ${await res.text()}`);
-  existing.push(...((await res.json()) as { experiments: { name: string; id: number; status: string }[] }).experiments);
+  existing.push(...((await res.json()) as { experiments: { name: string; id: number; status: string; configHash: string | null }[] }).experiments);
 }
 
+// A same-named experiment with another config is refused before anything is submitted.
+const pending = pendingSubmissions(files.map((f, i) => ({ ...f, configHash: plan.perFile[i].configHash })), existing);
+const items = pending.ok ? pending.items : stop(pending.error);
+
 // Sequential, stop on the first failure; re-running resumes from where it stopped.
-for (const { file: f, skip } of pendingSubmissions(files, existing)) {
+for (const { file: f, skip } of items) {
   if (skip) {
     console.log(`skip ${f.path} (already #${skip.id} ${skip.status})`);
     continue;

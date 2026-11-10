@@ -28,7 +28,7 @@ labRouter.get(
       where: filter.name === null ? undefined : { name: filter.name },
       orderBy: { id: 'desc' },
       take: LIST_LIMIT,
-      select: { id: true, createdAt: true, name: true, status: true, variable: true, specJson: true, finishedAt: true },
+      select: { id: true, createdAt: true, name: true, status: true, variable: true, specJson: true, manifestJson: true, finishedAt: true },
     });
     res.json({ experiments: rows.map(buildExperimentSummary) });
   }),

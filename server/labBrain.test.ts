@@ -79,6 +79,28 @@ describe('makeExperimentDecide', () => {
     expect(budget.spentUsd).toBeCloseTo(0.5 + r.costUsd, 12);
   });
 
+  it('charges the worst case when a call reports a non-finite cost, so the cap still trips', async () => {
+    const nanCost = { ...(decided() as object), usage: { input_tokens: Number.NaN, output_tokens: 200 } } as never;
+    const budget: ExperimentBudget = { limitUsd: ONE_CALL * 1.5, spentUsd: 0 };
+    await makeExperimentDecide({ anthropic: stub(nanCost), openrouter: null }, budget)(ctx());
+    expect(budget.spentUsd).toBeCloseTo(ONE_CALL, 12);
+    const create = stub(decided());
+    await expect(makeExperimentDecide({ anthropic: create, openrouter: null }, budget)(ctx())).rejects.toBeInstanceOf(BudgetExhausted);
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('keeps the cap through the OpenRouter loop when token counts are not numbers', async () => {
+    const bad = chatDecided();
+    (bad.json as { usage: unknown }).usage = { prompt_tokens: 'abc', completion_tokens: { n: 1 } };
+    const orCall = estimateCallCostUsd(OR_MODEL, MAX_TOOL_ROUNDS, DECISION_MAX_TOKENS, DECISION_PROMPT_TOKENS_ESTIMATE);
+    const budget: ExperimentBudget = { limitUsd: orCall * 1.5, spentUsd: 0 };
+    const r = await makeExperimentDecide({ anthropic: null, openrouter: vi.fn(async () => bad) as ChatFetch }, budget)(ctx(OR_MODEL));
+    expect(r.costUsd).toBe(0);
+    expect(budget.spentUsd).toBe(0);
+    budget.spentUsd = orCall; // as if earlier calls spent this much
+    await expect(makeExperimentDecide({ anthropic: null, openrouter: chatStub() }, budget)(ctx(OR_MODEL))).rejects.toBeInstanceOf(BudgetExhausted);
+  });
+
   it('allows a call whose worst case exactly fits the remaining budget', async () => {
     const create = stub(decided());
     await makeExperimentDecide({ anthropic: create, openrouter: null }, { limitUsd: ONE_CALL, spentUsd: 0 })(ctx());

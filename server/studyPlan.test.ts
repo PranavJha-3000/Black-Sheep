@@ -61,16 +61,22 @@ describe('checkStudyPlan', () => {
 });
 
 describe('pendingSubmissions', () => {
-  const files = ['a', 'b', 'c', 'd', 'e'].map((n) => ({ path: `${n}.json`, spec: { name: `study:H1:x:${n}` } }));
+  const files = ['a', 'b', 'c', 'd', 'e'].map((n) => ({ path: `${n}.json`, spec: { name: `study:H1:x:${n}` }, configHash: 'h' }));
   it('skips done, queued and running names and resubmits failed or new ones', () => {
     const out = pendingSubmissions(files, [
-      { name: 'study:H1:x:a', id: 1, status: 'done' },
-      { name: 'study:H1:x:b', id: 2, status: 'queued' },
-      { name: 'study:H1:x:c', id: 3, status: 'running' },
-      { name: 'study:H1:x:d', id: 4, status: 'failed' },
-      { name: 'study:H1:x:a', id: 5, status: 'failed' },
+      { name: 'study:H1:x:a', id: 1, status: 'done', configHash: 'h' },
+      { name: 'study:H1:x:b', id: 2, status: 'queued', configHash: 'h' },
+      { name: 'study:H1:x:c', id: 3, status: 'running', configHash: 'h' },
+      { name: 'study:H1:x:d', id: 4, status: 'failed', configHash: 'h' },
+      { name: 'study:H1:x:a', id: 5, status: 'failed', configHash: 'h' },
     ]);
-    expect(out.map((o) => o.file.path)).toEqual(['a.json', 'b.json', 'c.json', 'd.json', 'e.json']);
-    expect(out.map((o) => o.skip)).toEqual([{ id: 1, status: 'done' }, { id: 2, status: 'queued' }, { id: 3, status: 'running' }, null, null]);
+    if (!out.ok) throw new Error(out.error);
+    expect(out.items.map((o) => o.file.path)).toEqual(['a.json', 'b.json', 'c.json', 'd.json', 'e.json']);
+    expect(out.items.map((o) => o.skip)).toEqual([{ id: 1, status: 'done' }, { id: 2, status: 'queued' }, { id: 3, status: 'running' }, null, null]);
+  });
+
+  it('refuses a same-named experiment whose configHash differs instead of skipping it', () => {
+    const out = pendingSubmissions(files, [{ name: 'study:H1:x:c', id: 9, status: 'done', configHash: 'other' }]);
+    expect(out).toEqual({ ok: false, error: "Experiment #9 'study:H1:x:c' does not match its pre-registered spec (configHash other ≠ h)." });
   });
 });

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ToolResult } from '@black-sheep/engine/fundTools';
 import type { DecisionRequest } from './anthropic';
 import { costOfUsage } from '../budget';
-import { LLM_MAX_RETRIES } from '../../config/game';
+import { DECISION_PROMPT_TOKENS_ESTIMATE, LLM_MAX_RETRIES } from '../../config/game';
 import { openaiCompatFetch, runOpenAICompatLoop, type ChatFetch } from './openaiCompat';
 
 const MODEL = 'openai/gpt-test';
@@ -101,6 +101,27 @@ describe('runOpenAICompatLoop', () => {
     expect(r.usage).toEqual({ input_tokens: 1500, output_tokens: 300, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 });
     const expected = costOfUsage(MODEL, { input_tokens: 1000, output_tokens: 200 }) + costOfUsage(MODEL, { input_tokens: 500, output_tokens: 100 });
     expect(r.costUsd).toBeCloseTo(expected, 10);
+  });
+
+  it('counts NaN, missing and string token counts as 0 so cost stays finite', async () => {
+    for (const usage of [{ prompt_tokens: Number.NaN, completion_tokens: 200 }, {}, { prompt_tokens: 'abc', completion_tokens: '100' }]) {
+      const res = reply({ tool_calls: [call('a', 'submit_decision', JSON.stringify(SUBMIT))] }, 'tool_calls', usage as never);
+      const r = await runOpenAICompatLoop(fake(res), req(), sleep);
+      expect(Number.isFinite(r.costUsd)).toBe(true);
+      expect(typeof r.usage.input_tokens).toBe('number');
+      expect(typeof r.usage.output_tokens).toBe('number');
+      expect(r.usage.input_tokens).toBe(0);
+    }
+  });
+
+  it('meters one worst-case round for a timed-out request, which may have been billed', async () => {
+    const timeout = Object.assign(new Error('The operation was aborted due to timeout'), { name: 'TimeoutError' });
+    const r = await runOpenAICompatLoop(fake(timeout, reply({ tool_calls: [call('a', 'submit_decision', JSON.stringify(SUBMIT))] })), req(), sleep);
+    expect(r.outcome).toBe('decided');
+    expect(r.costUsd).toBeCloseTo(
+      costOfUsage(MODEL, { input_tokens: DECISION_PROMPT_TOKENS_ESTIMATE, output_tokens: 4096 }) + costOfUsage(MODEL, { input_tokens: 1000, output_tokens: 200 }),
+      10,
+    );
   });
 
   it('prices on the requested model, not the served variant', async () => {

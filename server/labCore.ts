@@ -41,7 +41,7 @@ import { estimateExperimentCostUsd, makeExperimentDecide, type ExperimentBudget,
  * labCore — PURE Research Lab rules (VISION §10, D-032, D-033): validate an
  * experiment request, check the admin token, and run an experiment spec into
  * its stored result. No I/O except what is injected: the yield, and for model
- * brains the provider call (`create`) and the decision sink (`onDecision`).
+ * brains the provider clients (`clients`: Anthropic and OpenRouter) and the decision sink (`onDecision`).
  */
 
 const NAME_MAX = 80;
@@ -115,11 +115,12 @@ function checkBase(x: unknown): Check<ArmConfig> {
     // An all-policy map is left out, so the spec (and its configHash) equals one that never named brains.
     if (Object.keys(brains.value).length) config.brains = brains.value;
   }
-  // Left absent unless given, so old specs keep their configHash.
+  // Left absent unless given, and absent for 'none' (the default), so old specs keep their configHash
+  // and a pre-Phase-3 config hashes the same as one the UI sends with memory 'none'.
   if (b.memory !== undefined) {
     const memory = checkMemory(b.memory);
     if (!memory.ok) return memory;
-    config.memory = memory.value;
+    if (memory.value !== 'none') config.memory = memory.value;
   }
   return { ok: true, value: config };
 }
@@ -339,6 +340,8 @@ export interface ExperimentSummary {
   variable: string;
   arms: number;
   seeds: number;
+  /** From the stored manifest; the study runner refuses a same-named row with another hash. */
+  configHash: string | null;
   createdAt: string;
   finishedAt: string | null;
 }
@@ -361,7 +364,7 @@ function parseJson<T>(json: string | null): T | null {
   }
 }
 
-export type ExperimentSummaryRow = Pick<ExperimentRow, 'id' | 'createdAt' | 'name' | 'status' | 'variable' | 'specJson' | 'finishedAt'>;
+export type ExperimentSummaryRow = Pick<ExperimentRow, 'id' | 'createdAt' | 'name' | 'status' | 'variable' | 'specJson' | 'manifestJson' | 'finishedAt'>;
 
 export function buildExperimentSummary(row: ExperimentSummaryRow): ExperimentSummary {
   const spec = parseJson<ExperimentSpec>(row.specJson);
@@ -372,6 +375,7 @@ export function buildExperimentSummary(row: ExperimentSummaryRow): ExperimentSum
     variable: row.variable,
     arms: Array.isArray(spec?.values) ? spec.values.length : 0,
     seeds: Array.isArray(spec?.seeds) ? spec.seeds.length : 0,
+    configHash: parseJson<ExperimentManifest>(row.manifestJson)?.configHash ?? null,
     createdAt: row.createdAt.toISOString(),
     finishedAt: row.finishedAt?.toISOString() ?? null,
   };

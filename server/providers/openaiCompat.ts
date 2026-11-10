@@ -1,7 +1,7 @@
 import { FUND_TOOLS, parseSubmittedDecision, SUBMIT_DECISION } from '@black-sheep/engine/fundTools';
 import { parseDecisionText } from '@black-sheep/engine/rivalLLM';
 import type { RivalDecision } from '@black-sheep/engine/rival';
-import { LLM_MAX_RETRIES, LLM_TIMEOUT_MS } from '../../config/game';
+import { DECISION_PROMPT_TOKENS_ESTIMATE, LLM_MAX_RETRIES, LLM_TIMEOUT_MS } from '../../config/game';
 import { costOfUsage } from '../budget';
 import type { DecisionRequest, LoopOutcome, LoopResult, MeteredUsage, ToolCallRecord } from './anthropic';
 
@@ -45,10 +45,12 @@ interface ChatToolCall {
 interface ChatResponse {
   model?: string;
   choices?: { finish_reason?: string | null; message?: { content?: string | null; tool_calls?: ChatToolCall[] } }[];
-  usage?: { prompt_tokens?: number; completion_tokens?: number };
+  usage?: { prompt_tokens?: unknown; completion_tokens?: unknown };
 }
 
 const clip = (s: string): string => s.slice(0, 200);
+/** Provider JSON is untrusted: a token count that is not a finite, non-negative number counts as 0 (never NaN or a string). */
+const tokens = (x: unknown): number => (typeof x === 'number' && Number.isFinite(x) && x >= 0 ? x : 0);
 const isRetryable = (status: number): boolean => status === 429 || status >= 500;
 
 export async function runOpenAICompatLoop(
@@ -80,6 +82,10 @@ export async function runOpenAICompatLoop(
         ({ status, json } = await chat(body));
       } catch (err) {
         thrown = clip(err instanceof Error ? err.message : String(err));
+        // A timed-out request may still have been billed: meter one worst-case round so the cap stays conservative.
+        if (err instanceof Error && err.name === 'TimeoutError') {
+          costUsd += costOfUsage(req.model, { input_tokens: DECISION_PROMPT_TOKENS_ESTIMATE, output_tokens: req.maxTokens });
+        }
       }
       if (thrown === null && status >= 200 && status < 300) {
         return json && typeof json === 'object' ? { res: json as ChatResponse } : { error: `HTTP ${status}: response was not JSON` };
@@ -100,7 +106,7 @@ export async function runOpenAICompatLoop(
       const { res } = r;
 
       servedBy = res.model ?? servedBy;
-      const u = { input_tokens: res.usage?.prompt_tokens ?? 0, output_tokens: res.usage?.completion_tokens ?? 0 };
+      const u = { input_tokens: tokens(res.usage?.prompt_tokens), output_tokens: tokens(res.usage?.completion_tokens) };
       usage.input_tokens += u.input_tokens;
       usage.output_tokens += u.output_tokens;
       // Priced on the requested model: OpenRouter may return dated variants the registry lacks.

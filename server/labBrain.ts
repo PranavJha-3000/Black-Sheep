@@ -83,7 +83,8 @@ export function makeExperimentDecide(clients: ProviderClients, budget: Experimen
     const loop = provider === 'openrouter'
       ? await runOpenAICompatLoop(clients.openrouter ?? noKey(), req)
       : await runDecisionLoop(clients.anthropic ?? noKey(), req);
-    budget.spentUsd += loop.costUsd;
+    // An unreadable cost (NaN, negative, non-number) would make every later cap check false: charge the worst case instead.
+    budget.spentUsd += typeof loop.costUsd === 'number' && Number.isFinite(loop.costUsd) && loop.costUsd >= 0 ? loop.costUsd : callEstimateUsd(model);
     lastLlmInput.set(key, input);
 
     return {

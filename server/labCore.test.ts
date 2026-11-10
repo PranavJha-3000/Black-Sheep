@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { buildExperimentDetail, buildExperimentSummary, buildRunReplay, navTickAxis, checkLabToken, decisionFromRow, dryRunExperiment, parseExperimentRequest, parseNameFilter, runExperimentSpec, type ExperimentRow } from './labCore';
-import { downsample, simulateWorld } from '@black-sheep/engine/experiment';
+import { downsample, experimentManifest, simulateWorld } from '@black-sheep/engine/experiment';
 import { EXPERIMENT_SERIES_POINTS, SNAPSHOT_EVERY_TICKS } from '../config/game';
 import { BudgetExhausted } from './labBrain';
 import { estimateCallCostUsd } from './budget';
@@ -70,6 +70,19 @@ describe('parseExperimentRequest: memory', () => {
   it('rejects an unknown memory mode', () => {
     expect(parseExperimentRequest(body({ variable: 'memory', values: ['none', 'total'] }), KEYED)).toEqual({ ok: false, error: 'memory must be one of none, episodic, reflective, full.' });
     expect(parseExperimentRequest(body({ base: { ...body().base, memory: 'x' } }), KEYED).ok).toBe(false);
+  });
+
+  it("drops a base memory of 'none' so the configHash equals a spec that never named memory", () => {
+    const hash = (base: Record<string, unknown>) => {
+      const r = parseExperimentRequest(body({ base }), KEYED);
+      if (!r.ok) throw new Error(r.error);
+      return { memory: r.spec.base.memory, hash: experimentManifest(r.spec).configHash };
+    };
+    const legacy = hash(body().base);
+    expect(hash({ ...body().base, memory: 'none' })).toEqual(legacy);
+    expect(legacy.memory).toBeUndefined();
+    expect(hash({ ...body().base, memory: 'episodic' })).toMatchObject({ memory: 'episodic' });
+    expect(hash({ ...body().base, memory: 'episodic' }).hash).not.toBe(legacy.hash);
   });
 });
 
@@ -228,7 +241,7 @@ describe('experiment payloads', () => {
 
   it('the list summary carries no spec, manifest or result', () => {
     expect(buildExperimentSummary(row)).toEqual({
-      id: 3, name: 'Director on/off', status: 'done', variable: 'directorMode', arms: 2, seeds: 3,
+      id: 3, name: 'Director on/off', status: 'done', variable: 'directorMode', arms: 2, seeds: 3, configHash: 'abcd1234',
       createdAt: '2026-11-02T10:00:00.000Z', finishedAt: '2026-11-02T10:00:03.000Z',
     });
   });

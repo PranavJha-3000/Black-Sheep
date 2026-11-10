@@ -224,9 +224,39 @@ export function svgReturnSeries(series: { label: string; points: number[] }[], t
   ].join('\n');
 }
 
-type StoredExperiment = { id: number; name: string; resultJson: unknown; specJson: unknown; status?: string; error?: string | null };
+type StoredExperiment = { id: number; name: string; resultJson: unknown; specJson: unknown; manifestJson?: unknown; status?: string; error?: string | null };
 
 const isStudy = (e: StoredExperiment) => e.name.startsWith('study:');
+
+/** The refusal shared by the exporter and the study runner. */
+export const preregMismatch = (id: number, name: string, stored: string | null, spec: string) =>
+  `Experiment #${id} '${name}' does not match its pre-registered spec (configHash ${stored} ≠ ${spec}).`;
+
+/**
+ * Only the pre-registered set (PREREGISTRATION: the committed paper/study/*.json) is analysed:
+ * a study row is kept when its name is a spec's and its stored configHash equals that spec's.
+ * `study:*` rows with no spec are returned as unmatched; a named row with another hash is an error.
+ */
+export function matchPreregistered(
+  experiments: StoredExperiment[],
+  specs: { name: string; configHash: string }[],
+): { ok: true; matched: StoredExperiment[]; unmatched: StoredExperiment[] } | { ok: false; error: string } {
+  const hashOf = new Map(specs.map((s) => [s.name, s.configHash]));
+  const matched: StoredExperiment[] = [];
+  const unmatched: StoredExperiment[] = [];
+  for (const e of experiments) {
+    if (!isStudy(e)) continue;
+    const want = hashOf.get(e.name);
+    if (want === undefined) {
+      unmatched.push(e);
+      continue;
+    }
+    const stored = parse<{ configHash?: string }>(e.manifestJson)?.configHash ?? null;
+    if (stored !== want) return { ok: false, error: preregMismatch(e.id, e.name, stored, want) };
+    matched.push(e);
+  }
+  return { ok: true, matched, unmatched };
+}
 
 /**
  * Resubmission rule (PREREGISTRATION amendment 1): per study name only the newest done experiment counts.
@@ -322,7 +352,7 @@ export function texH4Table(rows: CostQuality[], caption: string, label: string, 
   ].join('\n');
 }
 
-/** Every file the paper needs (path relative to the repo root), built from finished `study:*` experiments. */
+/** Every file the paper needs (path relative to the repo root), built from finished `study:*` experiments (pass matchPreregistered's `matched`). */
 export function buildPaperFiles(all: StoredExperiment[]): { path: string; content: string }[] {
   const experiments = latestDoneStudy(all).kept;
   const rows = studyRows(experiments);

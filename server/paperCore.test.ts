@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { holm } from '@black-sheep/engine/stats';
 import { STARTING_CAPITAL } from '../config/game';
-import { buildPaperFiles, costQuality, failedCsv, latestDoneStudy, pairedContrasts, studyRows, svgForest, texH4Table, texTable, toCsv, type Contrast, type StudyRow } from './paperCore';
+import { buildPaperFiles, costQuality, failedCsv, latestDoneStudy, matchPreregistered, pairedContrasts, studyRows, svgForest, texH4Table, texTable, toCsv, type Contrast, type StudyRow } from './paperCore';
 
 const M = 'claude-opus-5-5';
 const nav = (ret: number) => [STARTING_CAPITAL, STARTING_CAPITAL * (1 + ret)];
@@ -150,6 +150,25 @@ describe('resubmission and failures', () => {
       { ...exp(3, 'lab:other', [0], [0]), status: 'failed', error: 'not study' },
     ]);
     expect(csv).toBe('experimentId,name,error\n2,study:H2:b,"budget exhausted at $1.00, then ""x"""\n');
+  });
+});
+
+describe('matchPreregistered', () => {
+  const withHash = (e: ReturnType<typeof exp>, configHash: string, status = 'done') => ({ ...e, status, manifestJson: JSON.stringify({ configHash }) });
+  const specs = [{ name: 'study:H1:a', configHash: 'aaaa' }, { name: 'study:H3:b', configHash: 'bbbb' }];
+
+  it('keeps done and failed rows of committed specs and lists study rows with no spec', () => {
+    const r = matchPreregistered(
+      [withHash(exp(1, 'study:H1:a', [0], [0]), 'aaaa'), withHash(exp(2, 'study:H3:b', [0], [0]), 'bbbb', 'failed'), withHash(exp(3, 'study:H3:test-a', [0], [0]), 'cccc'), exp(4, 'lab:other', [0], [0])],
+      specs,
+    );
+    expect(r.ok && r.matched.map((e) => e.id)).toEqual([1, 2]);
+    expect(r.ok && r.unmatched.map((e) => e.id)).toEqual([3]);
+  });
+
+  it('stops on a same-named row whose configHash differs from its spec', () => {
+    const r = matchPreregistered([withHash(exp(1, 'study:H1:a', [0], [0]), 'aaaa'), withHash(exp(7, 'study:H3:b', [0], [0]), 'dddd')], specs);
+    expect(r).toEqual({ ok: false, error: "Experiment #7 'study:H3:b' does not match its pre-registered spec (configHash dddd ≠ bbbb)." });
   });
 });
 
