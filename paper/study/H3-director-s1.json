@@ -1,0 +1,30 @@
+{
+  "name": "study:H3:director:s1",
+  "variable": "directorMode",
+  "values": [
+    "none",
+    "rule"
+  ],
+  "base": {
+    "funds": [
+      "sterling-vale",
+      "halden-whitmore",
+      "crown-meridian"
+    ],
+    "directorMode": "rule",
+    "decisionEveryTicks": 10,
+    "ticks": 500,
+    "brains": {
+      "crown-meridian": "claude-haiku-5-5"
+    },
+    "memory": "none"
+  },
+  "seeds": [
+    1,
+    2,
+    3,
+    4,
+    5
+  ],
+  "budgetUsd": 6
+}

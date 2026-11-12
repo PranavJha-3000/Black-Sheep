@@ -1,0 +1,32 @@
+{
+  "name": "study:H2:memory:s4",
+  "variable": "memory",
+  "values": [
+    "none",
+    "episodic",
+    "reflective",
+    "full"
+  ],
+  "base": {
+    "funds": [
+      "sterling-vale",
+      "halden-whitmore",
+      "crown-meridian"
+    ],
+    "directorMode": "rule",
+    "decisionEveryTicks": 10,
+    "ticks": 500,
+    "brains": {
+      "crown-meridian": "claude-haiku-5-5"
+    },
+    "memory": "none"
+  },
+  "seeds": [
+    16,
+    17,
+    18,
+    19,
+    20
+  ],
+  "budgetUsd": 12
+}

@@ -8,16 +8,21 @@ import {
   fnv1a,
   initialSimState,
   simulateWorld,
+  simulateWorldAsync,
+  type DecisionRecord,
   stepWorld,
   type ArmConfig,
   type ExperimentSpec,
   type RunResult,
 } from './experiment';
 import { openPosition } from './portfolio';
+import { getFundProfile } from './funds';
 import { STARTING_CAPITAL } from '../../../config/game';
 
 const ALL = ['sterling-vale', 'halden-whitmore', 'crown-meridian'];
 const base: ArmConfig = { funds: ALL, directorMode: 'rule', decisionEveryTicks: null, ticks: 300 };
+/** configHash of the dir spec below, computed before brains/budget existed (commit 85959d4). */
+const PINNED_POLICY_CONFIG_HASH = '150e137a';
 
 describe('simulateWorld', () => {
   it('is reproducible: the same arm and seed give the same digest and series', () => {
@@ -107,15 +112,33 @@ describe('hashing and manifest', () => {
     expect(m.configHash).toBe(experimentManifest({ ...spec }).configHash);
     expect(m.configHash).not.toBe(experimentManifest({ ...spec, seeds: [1, 3] }).configHash);
   });
+
+  it('a policy-only manifest is byte-identical to the pre-brains shape', () => {
+    const spec: ExperimentSpec = { name: 'dir', base, variable: 'directorMode', values: ['none', 'rule'], seeds: [1, 2] };
+    const m = experimentManifest(spec);
+    expect(JSON.stringify(m)).toBe(
+      JSON.stringify({ configHash: m.configHash, fundProfileHashes: m.fundProfileHashes, worldConstantsHash: m.worldConstantsHash, seeds: [1, 2], engine: 'black-sheep-engine', policyOnly: true }),
+    );
+    // Pinned: brains support must not move a policy-only spec's config hash.
+    expect(m.configHash).toBe(fnv1a(canonicalJson(spec)));
+    expect(m.configHash).toBe(PINNED_POLICY_CONFIG_HASH);
+    // A model brain on a fund outside the roster is still policy-only.
+    expect(experimentManifest({ ...spec, base: { ...base, funds: ['sterling-vale'], brains: { 'crown-meridian': 'claude-haiku-5-5' } } }).policyOnly).toBe(true);
+  });
+
+  it('a spec with a model brain records policyOnly: false', () => {
+    const spec: ExperimentSpec = { name: 'b', base, variable: 'brains', values: [{}, { 'crown-meridian': 'claude-haiku-5-5' }], seeds: [1], budgetUsd: 5 };
+    expect(experimentManifest(spec).policyOnly).toBe(false);
+  });
 });
 
 function run(seed: number, navEnd: Record<string, number>, liquidated: string[] = []): RunResult {
   return {
     seed,
     funds: Object.entries(navEnd).map(([key, end]) => ({
-      key, name: key.toUpperCase(), navs: [100, end], liquidated: liquidated.includes(key), liquidatedAtTick: null, decisions: 1, trades: 1,
+      key, name: key.toUpperCase(), navs: [100, end], liquidated: liquidated.includes(key), liquidatedAtTick: null, decisions: 1, trades: 1, sources: { policy: 1, llm: 0, fallback: 0 },
     })),
-    events: [], directorInterventions: seed % 2, digest: 'x',
+    events: [], directorInterventions: seed % 2, costUsd: 0, digest: 'x',
   };
 }
 
@@ -137,7 +160,7 @@ describe('compareArms', () => {
     const b = arms[1].funds[0];
     expect(b.survival).toBe(0.5);
     // Seed 1: +0.10, seed 2: -0.10 → mean 0; B beats A on one seed.
-    expect(b.vsBaseline).toEqual({ meanDiff: expect.closeTo(0, 10), wins: 1, pairs: 2 });
+    expect(b.vsBaseline).toMatchObject({ meanDiff: expect.closeTo(0, 10), wins: 1, pairs: 2 });
     expect(b.baselineLabel).toBe('A');
     expect(arms[1].meanDirectorInterventions).toBe(0.5);
   });
@@ -146,6 +169,30 @@ describe('compareArms', () => {
     const [arm] = compareArms([{ label: 'A', runs: [run(1, { f: 110 })] }], 100);
     expect(arm.funds[0].totalReturn.std).toBeNull();
     expect(JSON.stringify(arm)).not.toMatch(/NaN|Infinity/);
+  });
+});
+
+describe('compareArms statistics', () => {
+  it('compareArms reports CI and Holm-adjusted p for paired arms', () => {
+    const seeds = [1, 2, 3, 4, 5];
+    const arms = compareArms(
+      [
+        { label: 'A', runs: seeds.map((s) => run(s, { f: 100 + s, g: 100 })) },
+        { label: 'B', runs: seeds.map((s) => run(s, { f: 100 + s * 2, g: 100 - s })) },
+      ],
+      100,
+    );
+    for (const f of arms[1].funds) {
+      const v = f.vsBaseline!;
+      expect(v.ci).not.toBeNull();
+      expect(v.pSign).toBeGreaterThanOrEqual(0);
+      expect(v.pHolm).toBeGreaterThanOrEqual(v.pSign);
+      expect(v.pHolm).toBeLessThanOrEqual(1);
+      expect(f.totalReturnCI).not.toBeNull();
+    }
+    expect(arms[0].funds[0].vsBaseline).toBeNull();
+    expect(arms[0].fallbackRate).toBeNull();
+    expect(arms[0].meanCostUsd).toBe(0);
   });
 });
 
@@ -201,9 +248,9 @@ describe('compareArms baselines (review I-3)', () => {
     expect(arms[1].funds[0]).toMatchObject({ vsBaseline: null, baselineLabel: null });
     const [f, g] = arms[2].funds;
     expect(f.baselineLabel).toBe('funds=f');
-    expect(f.vsBaseline).toEqual({ meanDiff: expect.closeTo(-0.1, 10), wins: 0, pairs: 1 });
+    expect(f.vsBaseline).toMatchObject({ meanDiff: expect.closeTo(-0.1, 10), wins: 0, pairs: 1 });
     expect(g.baselineLabel).toBe('funds=g');
-    expect(g.vsBaseline).toEqual({ meanDiff: expect.closeTo(0.1, 10), wins: 1, pairs: 1 });
+    expect(g.vsBaseline).toMatchObject({ meanDiff: expect.closeTo(0.1, 10), wins: 1, pairs: 1 });
   });
 });
 
@@ -218,5 +265,143 @@ describe('policy funds survive their own market (D-034)', () => {
       }
     }
     expect(liquidated).toBeLessThanOrEqual(2);
+  });
+});
+
+describe('async world loop', () => {
+  const policyDecide = async () => {
+    throw new Error('policy funds must never reach decide');
+  };
+
+  it('policy digests are unchanged by the async split', () => {
+    const a = { funds: ALL, directorMode: 'rule' as const, decisionEveryTicks: null, ticks: 600 };
+    expect(simulateWorld(a, 7).digest).toBe('52f9903a');
+    expect(simulateWorld({ ...a, directorMode: 'none' }, 21).digest).toBe('22858214');
+  });
+
+  it('memory does not change policy-only digests', () => {
+    const a = { funds: ALL, directorMode: 'rule' as const, decisionEveryTicks: null, ticks: 600, memory: 'full' as const };
+    expect(simulateWorld(a, 7).digest).toBe('52f9903a');
+    expect(simulateWorld({ ...a, directorMode: 'none' }, 21).digest).toBe('22858214');
+  });
+
+  it('model fund sees its episodes on the next decision', async () => {
+    const lengths = async (memory: 'none' | 'episodic') => {
+      const seen: number[] = [];
+      let bought = false;
+      const arm: ArmConfig = { ...base, funds: ['crown-meridian'], ticks: 300, memory, brains: { 'crown-meridian': 'claude-haiku-5-5' } };
+      await simulateWorldAsync(arm, 3, async ({ input }) => {
+        seen.push(input.memory?.length ?? -1);
+        const buy = !bought;
+        bought = true;
+        return {
+          source: 'llm', model: 'claude-haiku-5-5', costUsd: 0, inputTokens: 0, outputTokens: 0, latencyMs: 0, toolCalls: [], outcome: null,
+          decision: buy
+            ? { action: 'buy', ticker: input.companies[0].ticker, dollarAmount: 1000, reasoning: 'x', confidence: 1 }
+            : { action: 'hold', reasoning: 'x' },
+        } as never;
+      });
+      return seen;
+    };
+    const on = await lengths('episodic');
+    expect(on[0]).toBe(0);
+    expect(on[1]).toBe(1);
+    expect((await lengths('none')).every((n) => n === 0)).toBe(true);
+  });
+
+  it('spec without memory keeps its configHash', () => {
+    const spec: ExperimentSpec = { name: 'x', base, variable: 'directorMode', values: ['none', 'rule'], seeds: [1] };
+    expect(canonicalJson(spec)).not.toContain('memory');
+    expect(experimentManifest({ ...spec, base: { ...base, memory: undefined } }).configHash).toBe(experimentManifest(spec).configHash);
+  });
+
+  it('simulateWorldAsync with no model brains matches simulateWorld', async () => {
+    for (const seed of [1, 2, 3]) {
+      const sync = simulateWorld(base, seed);
+      const async_ = await simulateWorldAsync(base, seed, policyDecide);
+      expect(async_.digest).toBe(sync.digest);
+      expect(async_.funds.map((f) => f.sources)).toEqual(sync.funds.map((f) => f.sources));
+      expect(async_.costUsd).toBe(0);
+    }
+  });
+
+  it('brains routes only model funds to the injected decide', async () => {
+    const calls: string[] = [];
+    const arm: ArmConfig = { ...base, brains: { 'crown-meridian': 'claude-haiku-5-5' } };
+    const r = await simulateWorldAsync(arm, 5, async ({ fund }) => {
+      calls.push(fund.profile.key);
+      return { source: 'llm', model: 'claude-haiku-5-5', decision: { action: 'hold', reasoning: 'stub' } as never, costUsd: 0.01, inputTokens: 1, outputTokens: 1, latencyMs: 1, toolCalls: [], outcome: null };
+    });
+    expect(new Set(calls)).toEqual(new Set(['crown-meridian']));
+    for (const f of r.funds) {
+      if (f.key === 'crown-meridian') expect(f.sources.llm).toBe(calls.length);
+      else {
+        expect(f.sources.policy).toBeGreaterThan(0);
+        expect(f.sources.llm).toBe(0);
+      }
+    }
+    expect(r.costUsd).toBeCloseTo(calls.length * 0.01);
+  });
+
+  it("the risk limit clamps a model's oversized buy", async () => {
+    const arm: ArmConfig = { ...base, funds: ['crown-meridian'], brains: { 'crown-meridian': 'claude-haiku-5-5' } };
+    const seen: DecisionRecord[] = [];
+    await simulateWorldAsync(
+      arm,
+      3,
+      async ({ input }) => ({
+        source: 'llm', model: 'claude-haiku-5-5', costUsd: 0, inputTokens: 0, outputTokens: 0, latencyMs: 0, toolCalls: [], outcome: null,
+        decision: { action: 'buy', ticker: input.companies[0].ticker, dollarAmount: 1e12, reasoning: 'all in', confidence: 1 },
+      }),
+      (d) => void seen.push(d),
+    );
+    const first = seen[0];
+    const cap = STARTING_CAPITAL * getFundProfile('crown-meridian')!.maxPositionFraction;
+    expect(first.decision.action).toBe('buy');
+    expect(first.decision.dollarAmount).toBeGreaterThan(0);
+    expect(first.decision.dollarAmount).toBeLessThanOrEqual(cap);
+  });
+
+  it('onDecision sees every decision in tick order', async () => {
+    const seen: DecisionRecord[] = [];
+    const r = await simulateWorldAsync(base, 4, policyDecide, (d) => void seen.push(d));
+    expect(seen.length).toBe(r.funds.reduce((n, f) => n + f.decisions, 0));
+    for (let i = 1; i < seen.length; i++) expect(seen[i].tick).toBeGreaterThanOrEqual(seen[i - 1].tick);
+  });
+
+  it('events carry their tick', () => {
+    const r = simulateWorld(base, 7);
+    expect(r.events.length).toBeGreaterThan(0);
+    for (const e of r.events) expect(e.tick).toBeGreaterThan(0);
+  });
+});
+
+describe('behaviour metrics', () => {
+  it('behaviour is attached to every fund and digests are unchanged', () => {
+    const a = { funds: ALL, directorMode: 'rule' as const, decisionEveryTicks: null, ticks: 600 };
+    const r = simulateWorld(a, 7);
+    expect(r.digest).toBe('52f9903a');
+    for (const f of r.funds) {
+      expect(Object.keys(f.behaviour ?? {}).sort()).toEqual(['actionEntropy', 'repeatedErrorRate', 'riskCompliance', 'shockDeRisk', 'tradeRate']);
+      expect(f.behaviour?.tradeRate).toBe(f.decisions ? f.trades / f.decisions : null);
+      expect(f).not.toHaveProperty('trail');
+      expect(f).not.toHaveProperty('gross');
+    }
+    expect(simulateWorld({ ...a, directorMode: 'none' }, 21).digest).toBe('22858214');
+  });
+
+  it('compareArms reports behaviour means with CI and skips nulls', () => {
+    const withB = (seed: number, entropy: number | null): RunResult => {
+      const r = run(seed, { f: 110 });
+      r.funds[0].behaviour = { actionEntropy: entropy, riskCompliance: null, repeatedErrorRate: null, shockDeRisk: null, tradeRate: 0.5 };
+      return r;
+    };
+    const legacy = run(3, { f: 110 }); // no behaviour field
+    const [arm] = compareArms([{ label: 'A', runs: [withB(1, 0.2), withB(2, 0.4), withB(4, null), legacy] }], 100);
+    const b = arm.funds[0].behaviour;
+    expect(b.actionEntropy?.mean).toBeCloseTo(0.3, 12);
+    expect(b.actionEntropy?.ci).not.toBeNull();
+    expect(b.tradeRate?.mean).toBe(0.5);
+    expect(b.riskCompliance).toBeNull();
   });
 });

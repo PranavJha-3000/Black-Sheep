@@ -22,3 +22,15 @@ dist-ssr/
 
 # Local Postgres data (npm run db:local)
 .pgdata/
+
+# LaTeX build output (the compiled paper PDF is not committed)
+paper/*.pdf
+paper/*.aux
+paper/*.bbl
+paper/*.blg
+paper/*.out
+paper/*.toc
+paper/*.fls
+paper/*.fdb_latexmk
+paper/*.synctex.gz
+paper/svg-inkscape/

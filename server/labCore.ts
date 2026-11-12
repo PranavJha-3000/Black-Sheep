@@ -1,30 +1,47 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import {
+  armModelFunds,
   canonicalJson,
   compareArms,
   downsample,
+  downsampleIndex,
   expandArms,
   EXPERIMENT_VARIABLES,
   simulateWorld,
+  simulateWorldAsync,
   type ArmComparison,
   type ArmConfig,
+  type DecideFn,
+  type DecisionRecord,
+  type DecisionSource,
+  type FundBrain,
+  type MemoryMode,
   type ExperimentSpec,
   type ExperimentManifest,
   type ExperimentVariable,
   type RunResult,
 } from '@black-sheep/engine/experiment';
+import type { Behaviour } from '@black-sheep/engine/behaviour';
 import { FUND_PROFILES, getFundProfile } from '@black-sheep/engine/funds';
+import { seriesMetrics } from '@black-sheep/engine/metrics';
+import { MODEL_REGISTRY, type ModelProvider } from '../config/models';
 import {
   EXPERIMENT_MAX_ARMS,
+  EXPERIMENT_MAX_BUDGET_USD,
   EXPERIMENT_MAX_SEEDS,
   EXPERIMENT_MAX_TICKS,
+  EXPERIMENT_REPLAY_MAX_DECISIONS,
   EXPERIMENT_SERIES_POINTS,
+  SNAPSHOT_EVERY_TICKS,
+  STARTING_CAPITAL,
 } from '../config/game';
+import { estimateExperimentCostUsd, makeExperimentDecide, type ExperimentBudget, type ProviderClients } from './labBrain';
 
 /**
  * labCore — PURE Research Lab rules (VISION §10, D-032, D-033): validate an
  * experiment request, check the admin token, and run an experiment spec into
- * its stored result. No I/O except the injected yield.
+ * its stored result. No I/O except what is injected: the yield, and for model
+ * brains the provider clients (`clients`: Anthropic and OpenRouter) and the decision sink (`onDecision`).
  */
 
 const NAME_MAX = 80;
@@ -54,10 +71,29 @@ function checkCadence(x: unknown): Check<number | null> {
   return isInt(x) && x >= 1 && x <= MAX_CADENCE ? { ok: true, value: x } : fail(`Decision cadence must be null or an integer 1–${MAX_CADENCE}.`);
 }
 
+/** Fund key -> 'policy' | model id. 'policy' entries are dropped: absent already means policy. */
+function checkBrains(x: unknown): Check<Record<string, FundBrain>> {
+  if (!x || typeof x !== 'object' || Array.isArray(x)) return fail('Brains must be an object of fund key -> policy or a model id.');
+  const out: Record<string, FundBrain> = {};
+  for (const [k, v] of Object.entries(x)) {
+    if (!getFundProfile(k)) return fail(`Unknown fund key in brains: ${k}.`);
+    if (v === 'policy') continue;
+    if (typeof v !== 'string' || !Object.prototype.hasOwnProperty.call(MODEL_REGISTRY, v)) return fail(`Unknown brain for ${k}: ${String(v)} (use 'policy' or a model id).`);
+    out[k] = v as FundBrain;
+  }
+  return { ok: true, value: out };
+}
+
+function checkMemory(x: unknown): Check<MemoryMode> {
+  return x === 'none' || x === 'episodic' || x === 'reflective' || x === 'full' ? { ok: true, value: x } : fail('memory must be one of none, episodic, reflective, full.');
+}
+
 const VALUE_CHECKS: Record<ExperimentVariable, (x: unknown) => Check<unknown>> = {
   directorMode: checkDirector,
   funds: checkFunds,
   decisionEveryTicks: checkCadence,
+  brains: checkBrains,
+  memory: checkMemory,
 };
 
 function checkBase(x: unknown): Check<ArmConfig> {
@@ -72,11 +108,39 @@ function checkBase(x: unknown): Check<ArmConfig> {
   if (!isInt(b.ticks) || b.ticks < MIN_TICKS || b.ticks > EXPERIMENT_MAX_TICKS) {
     return fail(`Ticks must be an integer ${MIN_TICKS}–${EXPERIMENT_MAX_TICKS}.`);
   }
-  return { ok: true, value: { funds: funds.value, directorMode: directorMode.value, decisionEveryTicks: cadence.value, ticks: b.ticks } };
+  const config: ArmConfig = { funds: funds.value, directorMode: directorMode.value, decisionEveryTicks: cadence.value, ticks: b.ticks };
+  if (b.brains !== undefined) {
+    const brains = checkBrains(b.brains);
+    if (!brains.ok) return brains;
+    // An all-policy map is left out, so the spec (and its configHash) equals one that never named brains.
+    if (Object.keys(brains.value).length) config.brains = brains.value;
+  }
+  // Left absent unless given, and absent for 'none' (the default), so old specs keep their configHash
+  // and a pre-Phase-3 config hashes the same as one the UI sends with memory 'none'.
+  if (b.memory !== undefined) {
+    const memory = checkMemory(b.memory);
+    if (!memory.ok) return memory;
+    if (memory.value !== 'none') config.memory = memory.value;
+  }
+  return { ok: true, value: config };
 }
 
-/** Validate an untrusted create request. Everything a run needs is checked here, before anything is stored. */
-export function parseExperimentRequest(body: unknown): { ok: true; spec: ExperimentSpec } | { ok: false; error: string } {
+/** The model providers whose key is set in `env` (keys themselves never leave the server). */
+export function configuredProviders(env: Record<string, string | undefined>): Set<ModelProvider> {
+  const providers = new Set<ModelProvider>();
+  if (env.ANTHROPIC_API_KEY) providers.add('anthropic');
+  if (env.OPENROUTER_API_KEY) providers.add('openrouter');
+  return providers;
+}
+
+/**
+ * Validate an untrusted create request. Everything a run needs is checked here, before anything is stored.
+ * `providers`: the model providers the server holds a key for (each model brain needs its provider's).
+ */
+export function parseExperimentRequest(
+  body: unknown,
+  opts: { providers: ReadonlySet<ModelProvider> },
+): { ok: true; spec: ExperimentSpec } | { ok: false; error: string } {
   if (!body || typeof body !== 'object') return fail('Request body must be a JSON object.');
   const b = body as Record<string, unknown>;
 
@@ -113,7 +177,41 @@ export function parseExperimentRequest(body: unknown): { ok: true; spec: Experim
   if (!seeds.every((s) => isInt(s) && s >= 0 && s <= MAX_SEED)) return fail(`Seeds must be integers 0–${MAX_SEED}.`);
   if (new Set(seeds).size !== seeds.length) return fail('Seeds must be distinct.');
 
-  return { ok: true, spec: { name, base: base.value, variable, values, seeds: seeds as number[] } };
+  const budgetUsd = b.budgetUsd ?? null;
+  if (budgetUsd !== null && !(typeof budgetUsd === 'number' && Number.isFinite(budgetUsd) && budgetUsd > 0 && budgetUsd <= EXPERIMENT_MAX_BUDGET_USD)) {
+    return fail(`budgetUsd must be a number above 0 and at most $${EXPERIMENT_MAX_BUDGET_USD}.`);
+  }
+
+  const spec: ExperimentSpec = { name, base: base.value, variable, values, seeds: seeds as number[] };
+  if (budgetUsd !== null) spec.budgetUsd = budgetUsd;
+  if (hasModelBrains(spec)) {
+    if (opts.providers.size === 0) return fail('Model brains need a provider key on the server.');
+    const missing = expandArms(spec)
+      .flatMap((a) => armModelFunds(a.config))
+      .map((f) => MODEL_REGISTRY[f.model].provider)
+      .find((p) => !opts.providers.has(p));
+    if (missing) return fail(`No key on the server for provider ${missing}.`);
+    if (budgetUsd === null) return fail(`budgetUsd is required when any fund uses a model (max $${EXPERIMENT_MAX_BUDGET_USD}).`);
+  }
+  return { ok: true, spec };
+}
+
+const NAME_FILTER_MAX = 200;
+
+/** `GET /lab/experiments?name=` — an exact-name filter; absent means no filter. */
+export function parseNameFilter(q: unknown): { ok: true; name: string | null } | { ok: false; error: string } {
+  if (q === undefined) return { ok: true, name: null };
+  if (typeof q !== 'string' || q.length === 0 || q.length > NAME_FILTER_MAX) return fail(`name must be a single string of 1–${NAME_FILTER_MAX} characters.`);
+  return { ok: true, name: q };
+}
+
+/** Validate a create request and price it (worst case) without storing anything: the form's live estimate. */
+export function dryRunExperiment(
+  body: unknown,
+  opts: { providers: ReadonlySet<ModelProvider> },
+): { ok: true; estimateUsd: number } | { ok: false; error: string } {
+  const parsed = parseExperimentRequest(body, opts);
+  return parsed.ok ? { ok: true, estimateUsd: estimateExperimentCostUsd(parsed.spec) } : parsed;
 }
 
 const digest = (s: string) => createHash('sha256').update(s).digest();
@@ -134,17 +232,63 @@ export interface ExperimentResult {
   arms: ArmComparison[];
   /** NAV series of the first seed's run, per arm and fund, downsampled for charts. */
   series: { label: string; funds: { key: string; navs: number[] }[] }[];
-  /** Per-run fingerprints: rerunning a seed must reproduce its digest. */
-  runs: { label: string; runs: { seed: number; digest: string; liquidated: string[] }[] }[];
+  /** Per-run fingerprints (rerunning a seed must reproduce its digest) and the series a replay draws. */
+  runs: {
+    label: string;
+    runs: {
+      seed: number;
+      digest: string;
+      liquidated: string[];
+      /** Fund key -> NAV series, downsampled to EXPERIMENT_SERIES_POINTS. */
+      navs: Record<string, number[]>;
+      /** Always stored; absent in pre-Task-4 results and stripped from the detail payload (replay serves it). */
+      events?: RunResult['events'];
+      /** Fund key -> decision counts by source. */
+      sources: Record<string, Record<DecisionSource, number>>;
+      costUsd: number;
+      /** Fund key -> behavioural metrics; absent in results stored before this field. */
+      behaviour?: Record<string, Behaviour>;
+      /** Fund key -> metrics on the full-resolution NAV series (navs above are downsampled); absent in older results. */
+      metrics?: Record<string, { totalReturnPct: number; maxDrawdownPct: number; sharpe: number | null }>;
+    }[];
+  }[];
+  /** Model spend actually incurred across every run; 0 for policy-only experiments. */
+  costUsd: number;
+  /** Worst-case model spend the spec allowed for (estimateExperimentCostUsd). */
+  estimateUsd: number;
 }
 
-/** Run every arm on every seed; `yieldFn` runs between runs so the server's event loop stays responsive. */
-export async function runExperimentSpec(spec: ExperimentSpec, yieldFn: () => Promise<void>): Promise<ExperimentResult> {
+/** Whether any arm has a roster fund decided by a model. */
+const hasModelBrains = (spec: ExperimentSpec) => expandArms(spec).some((a) => armModelFunds(a.config).length > 0);
+
+/**
+ * Run every arm on every seed; `yieldFn` runs between runs so the server's event loop stays responsive.
+ * Arms with no model brain and no decision sink run the sync policy world; with a sink they run the async
+ * world (identical digests) so every policy decision is reported too. Model arms call `deps.clients`
+ * against one budget shared by the whole experiment; a BudgetExhausted error ends the experiment.
+ */
+export async function runExperimentSpec(
+  spec: ExperimentSpec,
+  yieldFn: () => Promise<void>,
+  deps?: { clients: ProviderClients; onDecision?: (arm: string, seed: number, r: DecisionRecord) => Promise<void>; budget?: ExperimentBudget },
+): Promise<ExperimentResult> {
+  const estimateUsd = estimateExperimentCostUsd(spec);
+  const clients: ProviderClients = deps?.clients ?? { anthropic: null, openrouter: null };
+  if (hasModelBrains(spec) && !clients.anthropic && !clients.openrouter) throw new Error('Model brains need a provider key on the server.');
+  // A caller-owned budget lets the caller see the spend even when the run throws.
+  const budget: ExperimentBudget = deps?.budget ?? { limitUsd: spec.budgetUsd ?? 0, spentUsd: 0 };
+  const onDecision = deps?.onDecision;
+  // Fresh per run (the gate state is per world). Policy funds never reach `decide`, so a policy-only arm needs no provider.
+  const decideFor = (): DecideFn => makeExperimentDecide(clients, budget);
   const arms: { label: string; runs: RunResult[] }[] = [];
   for (const arm of expandArms(spec)) {
     const runs: RunResult[] = [];
     for (const seed of spec.seeds) {
-      runs.push(simulateWorld(arm.config, seed));
+      runs.push(
+        armModelFunds(arm.config).length === 0 && !onDecision
+          ? simulateWorld(arm.config, seed)
+          : await simulateWorldAsync(arm.config, seed, decideFor(), onDecision && ((r) => onDecision(arm.label, seed, r))),
+      );
       await yieldFn();
     }
     arms.push({ label: arm.label, runs });
@@ -157,8 +301,20 @@ export async function runExperimentSpec(spec: ExperimentSpec, yieldFn: () => Pro
     })),
     runs: arms.map((a) => ({
       label: a.label,
-      runs: a.runs.map((r) => ({ seed: r.seed, digest: r.digest, liquidated: r.funds.filter((f) => f.liquidated).map((f) => f.key) })),
+      runs: a.runs.map((r) => ({
+        seed: r.seed,
+        digest: r.digest,
+        liquidated: r.funds.filter((f) => f.liquidated).map((f) => f.key),
+        navs: Object.fromEntries(r.funds.map((f) => [f.key, downsample(f.navs, EXPERIMENT_SERIES_POINTS)])),
+        events: r.events,
+        sources: Object.fromEntries(r.funds.map((f) => [f.key, f.sources])),
+        costUsd: r.costUsd,
+        behaviour: Object.fromEntries(r.funds.flatMap((f) => (f.behaviour ? [[f.key, f.behaviour]] : []))),
+        metrics: Object.fromEntries(r.funds.flatMap((f) => { const m = seriesMetrics(f.navs, STARTING_CAPITAL); return m.totalReturn === null ? [] : [[f.key, { totalReturnPct: m.totalReturn * 100, maxDrawdownPct: m.maxDrawdown * 100, sharpe: m.sharpe }]]; })),
+      })),
     })),
+    costUsd: budget.spentUsd,
+    estimateUsd,
   };
 }
 
@@ -184,6 +340,8 @@ export interface ExperimentSummary {
   variable: string;
   arms: number;
   seeds: number;
+  /** From the stored manifest; the study runner refuses a same-named row with another hash. */
+  configHash: string | null;
   createdAt: string;
   finishedAt: string | null;
 }
@@ -206,7 +364,7 @@ function parseJson<T>(json: string | null): T | null {
   }
 }
 
-export type ExperimentSummaryRow = Pick<ExperimentRow, 'id' | 'createdAt' | 'name' | 'status' | 'variable' | 'specJson' | 'finishedAt'>;
+export type ExperimentSummaryRow = Pick<ExperimentRow, 'id' | 'createdAt' | 'name' | 'status' | 'variable' | 'specJson' | 'manifestJson' | 'finishedAt'>;
 
 export function buildExperimentSummary(row: ExperimentSummaryRow): ExperimentSummary {
   const spec = parseJson<ExperimentSpec>(row.specJson);
@@ -217,18 +375,105 @@ export function buildExperimentSummary(row: ExperimentSummaryRow): ExperimentSum
     variable: row.variable,
     arms: Array.isArray(spec?.values) ? spec.values.length : 0,
     seeds: Array.isArray(spec?.seeds) ? spec.seeds.length : 0,
+    configHash: parseJson<ExperimentManifest>(row.manifestJson)?.configHash ?? null,
     createdAt: row.createdAt.toISOString(),
     finishedAt: row.finishedAt?.toISOString() ?? null,
   };
 }
 
 export function buildExperimentDetail(row: ExperimentRow): ExperimentDetail {
+  const result = parseJson<ExperimentResult>(row.resultJson);
+  // Per-run events are most of a large blob and polled; the replay route serves them one run at a time.
+  if (Array.isArray(result?.runs)) {
+    result.runs = result.runs.map((a) => ({ ...a, runs: Array.isArray(a.runs) ? a.runs.map((r) => ({ ...r, events: undefined })) : a.runs }));
+  }
   return {
     ...buildExperimentSummary(row),
     spec: parseJson<ExperimentSpec>(row.specJson),
     manifest: parseJson<ExperimentManifest>(row.manifestJson),
-    result: parseJson<ExperimentResult>(row.resultJson),
+    result,
     error: row.error,
     startedAt: row.startedAt?.toISOString() ?? null,
+  };
+}
+
+export interface RunReplay {
+  experimentId: number;
+  arm: string;
+  seed: number;
+  /** Fund key -> NAV series (downsampled); navs[k] was recorded at tick navTicks[k]. */
+  navs: Record<string, number[]>;
+  /** Exact tick of every NAV point, so decisions and events line up with the series. */
+  navTicks: number[];
+  events: RunResult['events'];
+  decisions: DecisionRecord[];
+  /** More decisions exist than EXPERIMENT_REPLAY_MAX_DECISIONS; the tail is cut. */
+  truncated: boolean;
+  manifest: ExperimentManifest;
+}
+
+/**
+ * Ticks of the stored NAV points. The engine records a NAV when the post-increment tick is a multiple of
+ * SNAPSHOT_EVERY_TICKS (no tick-0 point), so raw point k sits at SNAPSHOT_EVERY_TICKS * (k + 1); stored
+ * series are then thinned by the same downsampleIndex the engine's downsample uses.
+ */
+export function navTickAxis(ticks: number): number[] {
+  const raw = Math.floor(ticks / SNAPSHOT_EVERY_TICKS);
+  const at = (k: number) => SNAPSHOT_EVERY_TICKS * (k + 1);
+  if (raw <= EXPERIMENT_SERIES_POINTS) return Array.from({ length: raw }, (_, k) => at(k));
+  return Array.from({ length: EXPERIMENT_SERIES_POINTS }, (_, i) => at(downsampleIndex(i, raw, EXPERIMENT_SERIES_POINTS)));
+}
+
+/** The run's stored series for arm/seed, or null when the experiment has no such run or it predates navs/events (not replayable). */
+export function findRun(row: ExperimentRow, arm: string, seed: number) {
+  const result = parseJson<ExperimentResult>(row.resultJson);
+  const run = result?.runs?.find((a) => a.label === arm)?.runs?.find((r) => r.seed === seed);
+  return run && run.navs && Array.isArray(run.events) ? { ...run, events: run.events } : null;
+}
+
+/** One run of a finished experiment as the replay reads it; null for an unknown arm/seed or unfinished experiment. */
+export function buildRunReplay(row: ExperimentRow, arm: string, seed: number, decisions: DecisionRecord[]): RunReplay | null {
+  const run = findRun(row, arm, seed);
+  const manifest = parseJson<ExperimentManifest>(row.manifestJson);
+  if (!run || !manifest) return null;
+  const ticks = parseJson<ExperimentSpec>(row.specJson)?.base.ticks ?? 0;
+  return {
+    experimentId: row.id,
+    arm,
+    seed,
+    navs: run.navs,
+    navTicks: navTickAxis(ticks),
+    events: run.events,
+    decisions: decisions.slice(0, EXPERIMENT_REPLAY_MAX_DECISIONS),
+    truncated: decisions.length > EXPERIMENT_REPLAY_MAX_DECISIONS,
+    manifest,
+  };
+}
+
+/** A stored ExperimentDecision row back into the engine's DecisionRecord. */
+export function decisionFromRow(r: {
+  tick: number; fundKey: string; source: string; model: string | null; action: string; ticker: string | null;
+  dollarAmount: number | null; confidence: number | null; reasoning: string; costUsd: number; inputTokens: number;
+  outputTokens: number; latencyMs: number; toolCallsJson: string; outcome: string | null;
+}): DecisionRecord {
+  const calls = parseJson<{ name: string; ok: boolean }[]>(r.toolCallsJson);
+  return {
+    tick: r.tick,
+    fundKey: r.fundKey,
+    source: r.source as DecisionSource,
+    model: r.model,
+    decision: {
+      action: r.action,
+      ...(r.ticker !== null && { ticker: r.ticker }),
+      ...(r.dollarAmount !== null && { dollarAmount: r.dollarAmount }),
+      reasoning: r.reasoning,
+      confidence: r.confidence ?? 0,
+    } as DecisionRecord['decision'],
+    costUsd: r.costUsd,
+    inputTokens: r.inputTokens,
+    outputTokens: r.outputTokens,
+    latencyMs: r.latencyMs,
+    toolCalls: Array.isArray(calls) ? calls : [],
+    outcome: r.outcome,
   };
 }

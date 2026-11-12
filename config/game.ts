@@ -170,8 +170,18 @@ export const EXPERIMENT_MAX_TICKS = 5000;
 export const EXPERIMENT_MAX_SEEDS = 10;
 /** Most arms (values of the varied variable) per experiment. */
 export const EXPERIMENT_MAX_ARMS = 6;
+/** Hard USD cap an experiment with any model brain may declare as its budgetUsd. */
+export const EXPERIMENT_MAX_BUDGET_USD = 25;
 /** NAV points kept per fund per arm for charts (the first seed's run). */
 export const EXPERIMENT_SERIES_POINTS = 200;
+/** Most decisions one run replay returns; beyond it the payload says `truncated`. */
+export const EXPERIMENT_REPLAY_MAX_DECISIONS = 2000;
+/** A losing close counts as repeated when the same ticker is re-opened in the same direction within this many ticks. */
+export const BEHAVIOUR_REPEAT_WINDOW_TICKS = 50;
+/** Ticks after a market shock over which gross-exposure change is measured. */
+export const BEHAVIOUR_SHOCK_WINDOW_TICKS = 30;
+/** Smallest absolute event price impact (percent) that counts as a market shock. */
+export const BEHAVIOUR_SHOCK_MIN_IMPACT_PCT = 5;
 /** How often the runner looks for a queued experiment. */
 export const EXPERIMENT_POLL_MS = 2_000;
 /** RESEARCH LAB list/detail refetch interval while the view is open. */

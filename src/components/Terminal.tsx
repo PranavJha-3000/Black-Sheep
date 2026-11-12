@@ -11,16 +11,23 @@ import FundDetailView from "./FundDetailView";
 import ActivityView from "./ActivityView";
 import AnalyticsView from "./AnalyticsView";
 import ResearchLabView from "./ResearchLabView";
+import TimelineView from "./TimelineView";
 import { useGameStore, NAV_ITEMS } from "../store/gameStore";
 import { cx } from "./fmt";
+import { parseReplayHash } from "./replay";
 
 /**
  * The observation terminal (VISION §13). Humans watch; nothing here trades.
- * WORLD, FUNDS, FUND DETAIL, ACTIVITY, RESEARCH LAB and ANALYTICS are live;
- * TIMELINE is listed but arrives in a later stage.
+ * WORLD, FUNDS, FUND DETAIL, ACTIVITY, TIMELINE, RESEARCH LAB and ANALYTICS are live.
  */
 export default function Terminal() {
   useEffect(() => {
+    // A shared replay link (#/timeline/<id>/<arm>/<seed>) opens straight into that run.
+    const run = parseReplayHash(location.hash);
+    if (run) {
+      useGameStore.getState().setView("timeline");
+      useGameStore.getState().selectRun(run);
+    }
     // Poll the public world every ~2.5s; the server is the source of truth.
     void useGameStore.getState().poll();
     const id = setInterval(() => {
@@ -53,6 +60,7 @@ export default function Terminal() {
               {view === "activity" && <ActivityView />}
               {view === "analytics" && <AnalyticsView />}
               {view === "lab" && <ResearchLabView />}
+              {view === "timeline" && <TimelineView />}
             </div>
           </div>
         </main>

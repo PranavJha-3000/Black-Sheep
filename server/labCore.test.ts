@@ -1,7 +1,15 @@
-import { describe, expect, it } from 'vitest';
-import { buildExperimentDetail, buildExperimentSummary, checkLabToken, parseExperimentRequest, runExperimentSpec, type ExperimentRow } from './labCore';
+import { describe, expect, it, vi } from 'vitest';
+import { buildExperimentDetail, buildExperimentSummary, buildRunReplay, navTickAxis, checkLabToken, decisionFromRow, dryRunExperiment, parseExperimentRequest, parseNameFilter, runExperimentSpec, type ExperimentRow } from './labCore';
+import { downsample, experimentManifest, simulateWorld } from '@black-sheep/engine/experiment';
+import { EXPERIMENT_SERIES_POINTS, SNAPSHOT_EVERY_TICKS } from '../config/game';
+import { BudgetExhausted } from './labBrain';
+import { estimateCallCostUsd } from './budget';
+import type { CreateMessage } from './providers/anthropic';
+import { EXPERIMENT_REPLAY_MAX_DECISIONS, DECISION_MAX_TOKENS, DECISION_PROMPT_TOKENS_ESTIMATE, MAX_TOOL_ROUNDS } from '../config/game';
 
 const ALL = ['sterling-vale', 'halden-whitmore', 'crown-meridian'];
+const KEYED = { providers: new Set(['anthropic', 'openrouter'] as const) };
+const UNKEYED = { providers: new Set<'anthropic' | 'openrouter'>() };
 const body = (over: Record<string, unknown> = {}) => ({
   name: 'Director on/off',
   variable: 'directorMode',
@@ -13,14 +21,14 @@ const body = (over: Record<string, unknown> = {}) => ({
 
 describe('parseExperimentRequest', () => {
   it('accepts a valid one-variable experiment', () => {
-    const r = parseExperimentRequest(body());
+    const r = parseExperimentRequest(body(), KEYED);
     expect(r).toEqual({ ok: true, spec: body() });
   });
 
   it('accepts each variable with valid values and trims the name', () => {
-    expect(parseExperimentRequest(body({ variable: 'funds', values: [['crown-meridian'], ALL] })).ok).toBe(true);
-    expect(parseExperimentRequest(body({ variable: 'decisionEveryTicks', values: [null, 5, 30] })).ok).toBe(true);
-    const r = parseExperimentRequest(body({ name: '  spaced  ' }));
+    expect(parseExperimentRequest(body({ variable: 'funds', values: [['crown-meridian'], ALL] }), KEYED).ok).toBe(true);
+    expect(parseExperimentRequest(body({ variable: 'decisionEveryTicks', values: [null, 5, 30] }), KEYED).ok).toBe(true);
+    const r = parseExperimentRequest(body({ name: '  spaced  ' }), KEYED);
     expect(r.ok && r.spec.name).toBe('spaced');
   });
 
@@ -47,9 +55,90 @@ describe('parseExperimentRequest', () => {
     ['negative seed', body({ seeds: [-1] })],
     ['non-integer seed', body({ seeds: [1.5] })],
   ])('rejects %s', (_label, input) => {
-    const r = parseExperimentRequest(input);
+    const r = parseExperimentRequest(input, KEYED);
     expect(r.ok).toBe(false);
     expect(!r.ok && r.error.length).toBeGreaterThan(5);
+  });
+});
+
+describe('parseExperimentRequest: memory', () => {
+  it('accepts memory as the variable', () => {
+    const r = parseExperimentRequest(body({ variable: 'memory', values: ['none', 'episodic', 'full'] }), KEYED);
+    expect(r.ok && r.spec.values).toEqual(['none', 'episodic', 'full']);
+  });
+
+  it('rejects an unknown memory mode', () => {
+    expect(parseExperimentRequest(body({ variable: 'memory', values: ['none', 'total'] }), KEYED)).toEqual({ ok: false, error: 'memory must be one of none, episodic, reflective, full.' });
+    expect(parseExperimentRequest(body({ base: { ...body().base, memory: 'x' } }), KEYED).ok).toBe(false);
+  });
+
+  it("drops a base memory of 'none' so the configHash equals a spec that never named memory", () => {
+    const hash = (base: Record<string, unknown>) => {
+      const r = parseExperimentRequest(body({ base }), KEYED);
+      if (!r.ok) throw new Error(r.error);
+      return { memory: r.spec.base.memory, hash: experimentManifest(r.spec).configHash };
+    };
+    const legacy = hash(body().base);
+    expect(hash({ ...body().base, memory: 'none' })).toEqual(legacy);
+    expect(legacy.memory).toBeUndefined();
+    expect(hash({ ...body().base, memory: 'episodic' })).toMatchObject({ memory: 'episodic' });
+    expect(hash({ ...body().base, memory: 'episodic' }).hash).not.toBe(legacy.hash);
+  });
+});
+
+describe('parseExperimentRequest: model brains and budget', () => {
+  const brains = (over: Record<string, unknown> = {}) =>
+    body({ variable: 'brains', values: [{}, { 'crown-meridian': 'claude-haiku-5-5' }], budgetUsd: 5, ...over });
+
+  it('accepts a brains experiment with a budget', () => {
+    const r = parseExperimentRequest(brains(), KEYED);
+    expect(r.ok && r.spec).toMatchObject({ variable: 'brains', budgetUsd: 5, values: [{}, { 'crown-meridian': 'claude-haiku-5-5' }] });
+  });
+
+  it('rejects model brains without a provider', () => {
+    expect(parseExperimentRequest(brains(), UNKEYED)).toEqual({ ok: false, error: 'Model brains need a provider key on the server.' });
+    // A model brain set on the base counts too.
+    const viaBase = body({ base: { ...body().base, brains: { 'sterling-vale': 'claude-opus-5-5' } }, budgetUsd: 5 });
+    expect(parseExperimentRequest(viaBase, UNKEYED)).toEqual({ ok: false, error: 'Model brains need a provider key on the server.' });
+  });
+
+  it('rejects an openrouter brain without OPENROUTER key', () => {
+    const r = parseExperimentRequest(brains({ values: [{}, { 'crown-meridian': 'x-ai/grok-4.7' }] }), { providers: new Set(['anthropic'] as const) });
+    expect(r).toEqual({ ok: false, error: 'No key on the server for provider openrouter.' });
+    // The anthropic-only spec still passes with only the anthropic key.
+    expect(parseExperimentRequest(brains(), { providers: new Set(['anthropic'] as const) }).ok).toBe(true);
+  });
+
+  it('accepts mixed providers when both keys are present', () => {
+    const mixed = brains({ values: [{}, { 'crown-meridian': 'claude-haiku-5-5', 'sterling-vale': 'google/gemini-3.8-flash' }] });
+    expect(parseExperimentRequest(mixed, KEYED).ok).toBe(true);
+    expect(parseExperimentRequest(mixed, { providers: new Set(['openrouter'] as const) })).toEqual({ ok: false, error: 'No key on the server for provider anthropic.' });
+  });
+
+  it('requires budgetUsd for model brains', () => {
+    const error = 'budgetUsd is required when any fund uses a model (max $25).';
+    expect(parseExperimentRequest(brains({ budgetUsd: undefined }), KEYED)).toEqual({ ok: false, error });
+    expect(parseExperimentRequest(brains({ budgetUsd: null }), KEYED)).toEqual({ ok: false, error });
+  });
+
+  it.each([0, -1, 25.01, Number.NaN, '5', Infinity])('rejects budgetUsd %s', (budgetUsd) => {
+    expect(parseExperimentRequest(brains({ budgetUsd }), KEYED).ok).toBe(false);
+    expect(parseExperimentRequest(body({ budgetUsd }), KEYED).ok).toBe(false);
+  });
+
+  it('rejects unknown model ids in brains', () => {
+    expect(parseExperimentRequest(brains({ values: [{}, { 'crown-meridian': 'gpt-9' }] }), KEYED).ok).toBe(false);
+    expect(parseExperimentRequest(brains({ values: [{}, { 'apex-capital': 'claude-haiku-5-5' }] }), KEYED).ok).toBe(false);
+    expect(parseExperimentRequest(brains({ values: [{}, ['crown-meridian']] }), KEYED).ok).toBe(false);
+    const badBase = body({ base: { ...body().base, brains: { 'crown-meridian': 'gpt-9' } } });
+    expect(parseExperimentRequest(badBase, KEYED).ok).toBe(false);
+  });
+
+  it('policy-only spec needs no budget', () => {
+    const r = parseExperimentRequest(body(), UNKEYED);
+    expect(r).toEqual({ ok: true, spec: body() });
+    // An all-policy brains map is policy-only as well.
+    expect(parseExperimentRequest(body({ base: { ...body().base, brains: { 'crown-meridian': 'policy' } } }), UNKEYED).ok).toBe(true);
   });
 });
 
@@ -68,7 +157,7 @@ describe('checkLabToken', () => {
 describe('runExperimentSpec', () => {
   it('runs every arm on every seed, yielding between runs, and returns paired comparisons and series', async () => {
     let yields = 0;
-    const parsed = parseExperimentRequest(body({ seeds: [1, 2] }));
+    const parsed = parseExperimentRequest(body({ seeds: [1, 2] }), KEYED);
     if (!parsed.ok) throw new Error(parsed.error);
     const r = await runExperimentSpec(parsed.spec, async () => {
       yields++;
@@ -79,6 +168,66 @@ describe('runExperimentSpec', () => {
     expect(r.runs.map((a) => a.runs.map((x) => x.seed))).toEqual([[1, 2], [1, 2]]);
     expect(r.series[0].funds[0].navs.length).toBeGreaterThan(10);
     expect(JSON.stringify(r)).not.toMatch(/NaN|Infinity/);
+    expect(r.costUsd).toBe(0);
+    expect(r.estimateUsd).toBe(0);
+  });
+
+  it('reports policy decisions to a sink without changing the result', async () => {
+    const parsed = parseExperimentRequest(body({ seeds: [1, 2] }), KEYED);
+    if (!parsed.ok) throw new Error(parsed.error);
+    const plain = await runExperimentSpec(parsed.spec, async () => {});
+    const seen: string[] = [];
+    const sunk = await runExperimentSpec(parsed.spec, async () => {}, { clients: { anthropic: null, openrouter: null }, onDecision: async (_a, _s, d) => void seen.push(d.source) });
+    // Same digests (and everything else) as the sync policy world.
+    expect(sunk).toEqual(plain);
+    expect(seen.length).toBeGreaterThan(0);
+    expect(seen.every((s) => s === 'policy')).toBe(true);
+    expect(Object.keys(plain.runs[0].runs[0].navs)).toEqual(parsed.spec.base.funds);
+  });
+
+  const modelSpec = (budgetUsd: number) => {
+    const parsed = parseExperimentRequest(
+      body({ variable: 'brains', values: [{}, { 'crown-meridian': 'claude-haiku-5-5' }], seeds: [1], budgetUsd }),
+      KEYED,
+    );
+    if (!parsed.ok) throw new Error(parsed.error);
+    return parsed.spec;
+  };
+  // Every call answers with a hold through submit_decision: $0.0002 of haiku usage.
+  const create = vi.fn(async () => ({
+    id: 'm', type: 'message', role: 'assistant', model: 'claude-haiku-5-5', stop_reason: 'tool_use',
+    content: [{ type: 'tool_use', id: 't', name: 'submit_decision', input: { action: 'hold', reasoning: 'calm', confidence: 0.5 } }],
+    usage: { input_tokens: 1000, output_tokens: 200 },
+  })) as never as CreateMessage & ReturnType<typeof vi.fn>;
+
+  it('runs model brains through the injected provider and reports cost and estimate', async () => {
+    create.mockClear();
+    const seen: string[] = [];
+    const r = await runExperimentSpec(modelSpec(25), async () => {}, { clients: { anthropic: create, openrouter: null }, onDecision: async (arm, _seed, d) => void seen.push(`${arm}:${d.source}`) });
+    expect(create.mock.calls.length).toBeGreaterThan(0);
+    expect(r.costUsd).toBeCloseTo(create.mock.calls.length * 0.0002, 10);
+    expect(r.estimateUsd).toBeGreaterThan(r.costUsd);
+    expect(r.arms[1].fallbackRate).toBe(0);
+    // Both arms report decisions (stored for replay); only the model arm ever reaches the model.
+    expect(seen.some((s) => s.startsWith('brains=crown-meridian:claude-haiku-5-5:llm'))).toBe(true);
+    expect(seen.filter((s) => !s.startsWith('brains=crown-meridian:claude-haiku-5-5:')).every((s) => s.endsWith(':policy'))).toBe(true);
+    expect(seen.some((s) => !s.startsWith('brains=crown-meridian:claude-haiku-5-5:'))).toBe(true);
+  });
+
+  it('a budget exhausted mid-run stops the experiment before the next call', async () => {
+    create.mockClear();
+    const seen: unknown[] = [];
+    // Room for exactly one worst-case call, so the second must be refused.
+    const budget = estimateCallCostUsd('claude-haiku-5-5', MAX_TOOL_ROUNDS, DECISION_MAX_TOKENS, DECISION_PROMPT_TOKENS_ESTIMATE);
+    const err = await runExperimentSpec(modelSpec(budget), async () => {}, { clients: { anthropic: create, openrouter: null }, onDecision: async (_a, _s, d) => void seen.push(d) }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(BudgetExhausted);
+    expect((err as Error).message).toBe('budget exhausted at $0.00');
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(seen.length).toBeGreaterThan(0);
+  });
+
+  it('refuses a model-backed spec with no provider', async () => {
+    await expect(runExperimentSpec(modelSpec(5), async () => {}, { clients: { anthropic: null, openrouter: null } })).rejects.toThrow('Model brains need a provider key on the server.');
   });
 });
 
@@ -92,7 +241,7 @@ describe('experiment payloads', () => {
 
   it('the list summary carries no spec, manifest or result', () => {
     expect(buildExperimentSummary(row)).toEqual({
-      id: 3, name: 'Director on/off', status: 'done', variable: 'directorMode', arms: 2, seeds: 3,
+      id: 3, name: 'Director on/off', status: 'done', variable: 'directorMode', arms: 2, seeds: 3, configHash: 'abcd1234',
       createdAt: '2026-11-02T10:00:00.000Z', finishedAt: '2026-11-02T10:00:03.000Z',
     });
   });
@@ -105,10 +254,113 @@ describe('experiment payloads', () => {
     expect(buildExperimentDetail({ ...row, status: 'queued', resultJson: null }).result).toBeNull();
   });
 
+  it('the detail leaves out per-run events (the replay serves them)', () => {
+    const runs = [{ label: 'rule', runs: [{ seed: 1, digest: 'd', liquidated: [], navs: { a: [1] }, events: [{ tick: 3, type: 'x' }], sources: {}, costUsd: 0 }] }];
+    const d = buildExperimentDetail({ ...row, resultJson: JSON.stringify({ arms: [], series: [], runs }) });
+    expect(d.result!.runs[0].runs[0].events).toBeUndefined();
+    expect(JSON.parse(JSON.stringify(d)).result.runs[0].runs[0]).toEqual({ seed: 1, digest: 'd', liquidated: [], navs: { a: [1] }, sources: {}, costUsd: 0 });
+  });
+
   it('corrupt stored JSON degrades to null instead of throwing', () => {
     const d = buildExperimentDetail({ ...row, resultJson: '{oops', specJson: 'nope' });
     expect(d.result).toBeNull();
     expect(d.spec).toBeNull();
     expect(buildExperimentSummary({ ...row, specJson: 'nope' })).toMatchObject({ arms: 0, seeds: 0 });
+  });
+});
+
+describe('buildRunReplay', () => {
+  const run = (seed: number, nav: number) => ({ seed, digest: 'd', liquidated: [], navs: { a: [nav, nav + 1] }, events: [], sources: {}, costUsd: 0 });
+  const row: ExperimentRow = {
+    id: 3, createdAt: new Date(), name: 'x', status: 'done', variable: 'directorMode', specJson: JSON.stringify(body()),
+    manifestJson: JSON.stringify({ configHash: 'h', policyOnly: true }),
+    resultJson: JSON.stringify({ arms: [], series: [], runs: [{ label: 'rule', runs: [run(1, 100), run(2, 200)] }] }),
+    error: null, startedAt: null, finishedAt: null,
+  };
+  const rec = (tick: number) => decisionFromRow({
+    tick, fundKey: 'a', source: 'policy', model: null, action: 'hold', ticker: null, dollarAmount: null, confidence: null,
+    reasoning: 'r', costUsd: 0, inputTokens: 0, outputTokens: 0, latencyMs: 0, toolCallsJson: 'bad json', outcome: null,
+  });
+
+  it('returns null for an unknown arm or seed', () => {
+    expect(buildRunReplay(row, 'nope', 1, [])).toBeNull();
+    expect(buildRunReplay(row, 'rule', 9, [])).toBeNull();
+  });
+
+  it('returns null for a legacy run stored without navs or events, so the route 404s', () => {
+    const { navs: _n, ...noNavs } = run(1, 100);
+    const { events: _e, ...noEvents } = run(2, 200);
+    const legacy = { ...row, resultJson: JSON.stringify({ arms: [], series: [], runs: [{ label: 'rule', runs: [noNavs, noEvents] }] }) };
+    expect(buildRunReplay(legacy, 'rule', 1, [])).toBeNull();
+    expect(buildRunReplay(legacy, 'rule', 2, [])).toBeNull();
+    expect(buildRunReplay(row, 'rule', 1, [])?.events).toEqual([]);
+  });
+
+  it("returns the run's own navs, not the first seed's", () => {
+    expect(buildRunReplay(row, 'rule', 2, [])?.navs).toEqual({ a: [200, 201] });
+  });
+
+  it('caps decisions and flags truncation', () => {
+    const many = Array.from({ length: EXPERIMENT_REPLAY_MAX_DECISIONS + 1 }, (_, i) => rec(i));
+    const r = buildRunReplay(row, 'rule', 1, many)!;
+    expect(r.decisions).toHaveLength(EXPERIMENT_REPLAY_MAX_DECISIONS);
+    expect(r.truncated).toBe(true);
+    expect(buildRunReplay(row, 'rule', 1, many.slice(0, 5))?.truncated).toBe(false);
+  });
+
+  it('maps a stored row, tolerating bad toolCallsJson', () => {
+    expect(rec(4).toolCalls).toEqual([]);
+    expect(rec(4).decision).toEqual({ action: 'hold', reasoning: 'r', confidence: 0 });
+  });
+});
+
+describe('navTickAxis', () => {
+  const S = SNAPSHOT_EVERY_TICKS;
+  it('downsampled: one tick per point, increasing multiples of the snapshot spacing, ends at the raw ends', () => {
+    const t = navTickAxis(1500);
+    expect(t).toHaveLength(EXPERIMENT_SERIES_POINTS);
+    expect(t.every((x, i) => x % S === 0 && (i === 0 || x > t[i - 1]))).toBe(true);
+    expect([t[0], t[t.length - 1]]).toEqual([S, S * Math.floor(1500 / S)]);
+  });
+
+  it('not downsampled: every snapshot tick', () => {
+    const t = navTickAxis(300);
+    expect(t).toHaveLength(Math.floor(300 / S));
+    expect(t.slice(0, 3)).toEqual([S, 2 * S, 3 * S]);
+  });
+
+  it.each([100, 1500])('navs[i] is the raw NAV recorded at navTicks[i] (ticks %i)', (ticks) => {
+    const run = simulateWorld({ funds: ALL, directorMode: 'rule', decisionEveryTicks: null, ticks }, 7);
+    const t = navTickAxis(ticks);
+    for (const f of run.funds) {
+      expect(f.navs).toHaveLength(Math.floor(ticks / S));
+      const d = downsample(f.navs, EXPERIMENT_SERIES_POINTS);
+      expect(d).toHaveLength(t.length);
+      d.forEach((v, i) => expect(v).toBe(f.navs[t[i] / S - 1]));
+    }
+  });
+});
+
+describe('dryRunExperiment', () => {
+  const modelBody = () =>
+    body({ base: { funds: ALL, directorMode: 'rule', decisionEveryTicks: null, ticks: 200, brains: { 'crown-meridian': 'claude-haiku-5-5' } }, budgetUsd: 5 });
+
+  it('dry run validates and prices a request', () => {
+    const ok = dryRunExperiment(modelBody(), KEYED);
+    expect(ok.ok && ok.estimateUsd).toBeGreaterThan(0);
+    expect(dryRunExperiment(body(), KEYED)).toEqual({ ok: true, estimateUsd: 0 });
+    expect(dryRunExperiment(modelBody(), UNKEYED)).toEqual({ ok: false, error: 'Model brains need a provider key on the server.' });
+    expect(dryRunExperiment(body({ name: '' }), KEYED).ok).toBe(false);
+  });
+});
+
+describe('parseNameFilter', () => {
+  it('accepts an absent or exact name and rejects arrays, empty and over-long names', () => {
+    expect(parseNameFilter(undefined)).toEqual({ ok: true, name: null });
+    expect(parseNameFilter('study:H1:opus:s1')).toEqual({ ok: true, name: 'study:H1:opus:s1' });
+    expect(parseNameFilter(['a', 'b']).ok).toBe(false);
+    expect(parseNameFilter('').ok).toBe(false);
+    expect(parseNameFilter('x'.repeat(200)).ok).toBe(true);
+    expect(parseNameFilter('x'.repeat(201)).ok).toBe(false);
   });
 });

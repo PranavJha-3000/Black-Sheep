@@ -21,6 +21,7 @@ import {
   STARTING_CAPITAL,
 } from '../../../config/game';
 import * as GAME_CONFIG from '../../../config/game';
+import type { ModelId } from '../../../config/models';
 import { buildDirectorEvent, isMajorEvent, observeWorld, ruleDirector, validateIntervention } from './director';
 import { generateEvent, initialScheduler, maybeFireScriptedEvent, type SchedulerState } from './events';
 import { FUND_PROFILES, getFundProfile, type FundProfile } from './funds';
@@ -28,12 +29,28 @@ import { applyEvent, applyTrade, createInitialMarket, mulberry32, tickMarket } f
 import { seriesMetrics } from './metrics';
 import { decideByPolicy, enforceRiskLimit } from './policies';
 import { checkLiquidation, liquidateFund, markToMarket } from './portfolio';
-import { applyRivalDecision, buildDecisionInput, createRivalFund, type RivalFund } from './rival';
+import { computeBehaviour, shockTicks, type Behaviour, type TrailStep } from './behaviour';
+import { bootstrapMeanCI, holm, signTestP } from './stats';
+import {
+  applyRivalDecision,
+  buildDecisionInput,
+  createRivalFund,
+  type RivalDecision,
+  type RivalDecisionInput,
+  type RivalFund,
+} from './rival';
+import type { MemoryEntry } from './memory';
+import { updateSimMemory, type MemoryMode } from './simMemory';
+
+export type { MemoryMode };
 import type { MarketEvent, MarketState } from './types';
 
 // ---------------------------------------------------------------------------
 // Configuration
 // ---------------------------------------------------------------------------
+
+/** Who decides for a fund: its deterministic policy, or a model. */
+export type FundBrain = 'policy' | ModelId;
 
 export interface ArmConfig {
   /** Registry fund keys present in this world. */
@@ -43,9 +60,13 @@ export interface ArmConfig {
   /** Every fund's decision cadence; null keeps each registry cadence. */
   decisionEveryTicks: number | null;
   ticks: number;
+  /** Fund key -> brain; a missing key (or the whole map) means 'policy'. */
+  brains?: Record<string, FundBrain>;
+  /** In-world memory for model-backed funds; absent means 'none'. */
+  memory?: MemoryMode;
 }
 
-export const EXPERIMENT_VARIABLES = ['directorMode', 'funds', 'decisionEveryTicks'] as const;
+export const EXPERIMENT_VARIABLES = ['directorMode', 'funds', 'decisionEveryTicks', 'brains', 'memory'] as const;
 export type ExperimentVariable = (typeof EXPERIMENT_VARIABLES)[number];
 
 export interface ExperimentSpec {
@@ -55,10 +76,28 @@ export interface ExperimentSpec {
   /** One arm per value; each fund's baseline is the first arm that contains it. */
   values: unknown[];
   seeds: number[];
+  /** Hard USD cap on model calls across the whole experiment; absent/null when every fund is on its policy. */
+  budgetUsd?: number | null;
 }
 
 export function armLabel(variable: ExperimentVariable, value: unknown): string {
-  return `${variable}=${Array.isArray(value) ? value.join('+') : String(value)}`;
+  if (Array.isArray(value)) return `${variable}=${value.join('+')}`;
+  // A brains map: fund:brain pairs; an empty map is the all-policy arm.
+  if (value && typeof value === 'object') {
+    const pairs = Object.entries(value).map(([k, v]) => `${k}:${String(v)}`);
+    return `${variable}=${pairs.length ? pairs.join('+') : 'policy'}`;
+  }
+  return `${variable}=${String(value)}`;
+}
+
+/** Roster funds in this arm that a model decides for, with their effective cadence. */
+export function armModelFunds(arm: ArmConfig): { key: string; model: ModelId; every: number }[] {
+  return arm.funds.flatMap((key) => {
+    const brain = arm.brains?.[key];
+    const profile = getFundProfile(key);
+    if (!brain || brain === 'policy' || !profile) return [];
+    return [{ key, model: brain, every: arm.decisionEveryTicks ?? profile.decisionEveryTicks }];
+  });
 }
 
 export function expandArms(spec: ExperimentSpec): { label: string; config: ArmConfig }[] {
@@ -72,6 +111,24 @@ export function expandArms(spec: ExperimentSpec): { label: string; config: ArmCo
 // Simulation
 // ---------------------------------------------------------------------------
 
+export type DecisionSource = 'policy' | 'llm' | 'fallback';
+
+export interface DecisionRecord {
+  tick: number;
+  fundKey: string;
+  source: DecisionSource;
+  model: string | null;
+  decision: RivalDecision;
+  costUsd: number;
+  inputTokens: number;
+  outputTokens: number;
+  latencyMs: number;
+  toolCalls: { name: string; ok: boolean }[];
+  outcome: string | null;
+}
+
+export type DecideFn = (ctx: { fund: SimFund; input: RivalDecisionInput; tick: number }) => Promise<Omit<DecisionRecord, 'tick' | 'fundKey'>>;
+
 export interface SimFund {
   profile: FundProfile;
   every: number;
@@ -80,8 +137,16 @@ export interface SimFund {
   liquidated: boolean;
   liquidatedAtTick: number | null;
   navs: number[];
+  /** Gross exposure sampled with each nav point; dropped in summarize. */
+  gross: { tick: number; grossPct: number }[];
+  /** Every applied decision; dropped in summarize. */
+  trail: TrailStep[];
   decisions: number;
   trades: number;
+  brain: FundBrain;
+  sources: Record<DecisionSource, number>;
+  /** Only written for model-backed funds, per the arm's memory mode. */
+  memory: MemoryEntry[];
 }
 
 export interface SimState {
@@ -91,7 +156,7 @@ export interface SimState {
   scheduler: SchedulerState;
   /** Newest first, capped at EVENT_BUFFER (what funds see). */
   recentEvents: MarketEvent[];
-  log: { type: string; priceImpactPercent: number; director: boolean }[];
+  log: { tick: number; type: string; priceImpactPercent: number; director: boolean }[];
   lastEventTick: number | null;
   lastInterventionTick: number | null;
   directorInterventions: number;
@@ -115,8 +180,13 @@ export function initialSimState(arm: ArmConfig, seed: number): SimState {
       liquidated: false,
       liquidatedAtTick: null,
       navs: [],
+      gross: [],
+      trail: [],
       decisions: 0,
       trades: 0,
+      brain: arm.brains?.[key] ?? 'policy',
+      sources: { policy: 0, llm: 0, fallback: 0 },
+      memory: [],
     };
   });
   return {
@@ -133,8 +203,8 @@ export function initialSimState(arm: ArmConfig, seed: number): SimState {
   };
 }
 
-/** Advance one tick, in the live tick's order (server/world.ts tickWorld + decideFund). */
-export function stepWorld(s: SimState): void {
+/** Market, events, director, liquidations and NAV snapshots for one tick (server/world.ts tickWorld). */
+export function advanceTick(s: SimState): void {
   const rng = mulberry32((s.seed ^ Math.imul(s.market.tickCount + 1, 0x85ebca6b)) >>> 0);
   let next = tickMarket(s.market, s.seed);
   const scripted = maybeFireScriptedEvent(next, s.scheduler, rng);
@@ -177,36 +247,69 @@ export function stepWorld(s: SimState): void {
   for (const e of [evt, directorEvt]) {
     if (!e) continue;
     s.recentEvents = [e, ...s.recentEvents].slice(0, EVENT_BUFFER);
-    s.log.push({ type: e.type, priceImpactPercent: e.priceImpactPercent, director: e === directorEvt });
+    s.log.push({ tick: s.market.tickCount, type: e.type, priceImpactPercent: e.priceImpactPercent, director: e === directorEvt });
     if (isMajorEvent(e)) s.lastEventTick = s.market.tickCount;
   }
 
   if (s.market.tickCount % SNAPSHOT_EVERY_TICKS === 0) {
-    for (const f of s.funds) f.navs.push(markToMarket(f.fund, s.market).nav);
+    for (const f of s.funds) {
+      const { nav } = markToMarket(f.fund, s.market);
+      f.navs.push(nav);
+      const notional = f.fund.positions.reduce((a, p) => a + Math.abs(p.quantity * (s.market.companies[p.ticker]?.price ?? 0)), 0);
+      f.gross.push({ tick: s.market.tickCount, grossPct: nav > 0 ? (notional / nav) * 100 : 0 });
+    }
   }
+}
 
-  // Each fund on its own slot, never once liquidated. As in the live world,
-  // every fund deciding this tick reads the same pre-trade market; the trades
-  // then apply one after another, in registry order, on the moving market.
+/** Funds whose decision slot is this tick, never once liquidated. */
+function decidingFunds(s: SimState): SimFund[] {
   const t = s.market.tickCount;
-  const deciding = s.funds
-    .filter((f) => !f.liquidated && t !== 0 && t % f.every === f.offset)
-    .map((f) => {
-      const input = buildDecisionInput(f.fund, s.market, s.recentEvents, s.market.recentFlow);
-      return { f, decision: enforceRiskLimit(decideByPolicy(f.profile, input), input, f.profile) };
-    });
-  for (const { f, decision } of deciding) {
+  return s.funds.filter((f) => !f.liquidated && t !== 0 && t % f.every === f.offset);
+}
+
+/**
+ * Apply decisions one after another, in registry order, on the moving market.
+ * Every fund deciding this tick read the same pre-trade market (as in the live world).
+ */
+export function applyDecisions(s: SimState, decided: { f: SimFund; decision: RivalDecision; clamped: boolean }[]): void {
+  for (const { f, decision, clamped } of decided) {
     f.decisions++;
     let market = s.market;
     if ((decision.action === 'buy' || decision.action === 'short') && decision.ticker && decision.dollarAmount) {
       const impacted = applyTrade(market, decision.ticker, decision.dollarAmount, decision.action === 'buy' ? 'buy' : 'sell');
       market = { ...market, companies: impacted.companies, recentFlow: impacted.recentFlow };
     }
+    const closing = decision.action === 'close' ? f.fund.positions.find((p) => p.ticker === decision.ticker) : undefined;
     const after = applyRivalDecision(f.fund, decision, market);
+    const realizedPnL = decision.action === 'close' ? (after.lastDecision?.realizedPnL ?? null) : null;
+    f.trail.push({
+      tick: s.market.tickCount,
+      action: decision.action,
+      ticker: decision.ticker ?? null,
+      clamped,
+      realizedPnL,
+      direction: decision.action === 'buy' ? 'long' : decision.action === 'short' ? 'short' : realizedPnL !== null ? (closing?.direction ?? null) : null,
+    });
     if (after.positions !== f.fund.positions) f.trades++;
     f.fund = after;
     s.market = market;
   }
+}
+
+/** True when the risk limit left the proposal's action, ticker and size untouched. */
+const sameDecision = (a: RivalDecision, b: RivalDecision) => a.action === b.action && a.ticker === b.ticker && a.dollarAmount === b.dollarAmount;
+
+/** One synchronous tick with every fund on its policy. */
+export function stepWorld(s: SimState): void {
+  advanceTick(s);
+  const decided = decidingFunds(s).map((f) => {
+    const input = buildDecisionInput(f.fund, s.market, s.recentEvents, s.market.recentFlow);
+    f.sources.policy++;
+    const proposed = decideByPolicy(f.profile, input);
+    const decision = enforceRiskLimit(proposed, input, f.profile);
+    return { f, decision, clamped: !sameDecision(proposed, decision) };
+  });
+  applyDecisions(s, decided);
 }
 
 export interface RunResult {
@@ -219,9 +322,14 @@ export interface RunResult {
     liquidatedAtTick: number | null;
     decisions: number;
     trades: number;
+    sources: Record<DecisionSource, number>;
+    /** Absent in results stored before Phase 3. */
+    behaviour?: Behaviour;
   }[];
-  events: { type: string; priceImpactPercent: number; director: boolean }[];
+  events: { tick: number; type: string; priceImpactPercent: number; director: boolean }[];
   directorInterventions: number;
+  /** Sum of model-call costs; 0 for policy-only runs. */
+  costUsd: number;
   /** fnv1a of final prices and every NAV series: equal digests = the same world. */
   digest: string;
 }
@@ -229,6 +337,49 @@ export interface RunResult {
 export function simulateWorld(arm: ArmConfig, seed: number): RunResult {
   const s = initialSimState(arm, seed);
   for (let i = 0; i < arm.ticks; i++) stepWorld(s);
+  return summarize(s, 0);
+}
+
+/**
+ * Same world, but funds with a model brain decide through the injected `decide`
+ * (sequentially, registry order). The model proposes, the risk limit disposes.
+ * Policy funds never touch `decide`.
+ */
+export async function simulateWorldAsync(
+  arm: ArmConfig,
+  seed: number,
+  decide: DecideFn,
+  onDecision?: (r: DecisionRecord) => void | Promise<void>,
+): Promise<RunResult> {
+  const s = initialSimState(arm, seed);
+  let costUsd = 0;
+  const memoryMode = arm.memory ?? 'none';
+  for (let i = 0; i < arm.ticks; i++) {
+    advanceTick(s);
+    const tick = s.market.tickCount;
+    const inputs = decidingFunds(s).map((f) => ({ f, input: buildDecisionInput(f.fund, s.market, s.recentEvents, s.market.recentFlow) }));
+    const decided: { f: SimFund; decision: RivalDecision; source: DecisionSource; clamped: boolean }[] = [];
+    for (const { f, input } of inputs) {
+      const out: Omit<DecisionRecord, 'tick' | 'fundKey'> =
+        f.brain === 'policy'
+          ? { source: 'policy', model: null, decision: decideByPolicy(f.profile, input), costUsd: 0, inputTokens: 0, outputTokens: 0, latencyMs: 0, toolCalls: [], outcome: null }
+          : await decide({ fund: f, input: { ...input, memory: f.memory }, tick });
+      const decision = enforceRiskLimit(out.decision, input, f.profile);
+      const clamped = !sameDecision(out.decision, decision);
+      f.sources[out.source]++;
+      costUsd += out.costUsd;
+      decided.push({ f, decision, source: out.source, clamped });
+      await onDecision?.({ ...out, decision, tick, fundKey: f.profile.key });
+    }
+    applyDecisions(s, decided);
+    updateSimMemory(s.funds, decided, tick, memoryMode, (f) => markToMarket(f.fund, s.market).nav);
+  }
+  return summarize(s, costUsd);
+}
+
+function summarize(s: SimState, costUsd: number): RunResult {
+  const seed = s.seed;
+  const shocks = shockTicks(s.log);
   const funds = s.funds.map((f) => ({
     key: f.profile.key,
     name: f.profile.name,
@@ -237,6 +388,8 @@ export function simulateWorld(arm: ArmConfig, seed: number): RunResult {
     liquidatedAtTick: f.liquidatedAtTick,
     decisions: f.decisions,
     trades: f.trades,
+    sources: f.sources,
+    behaviour: computeBehaviour(f.trail, f.gross, shocks, f.trades),
   }));
   const prices = Object.fromEntries(Object.values(s.market.companies).map((c) => [c.ticker, c.price]));
   return {
@@ -244,6 +397,7 @@ export function simulateWorld(arm: ArmConfig, seed: number): RunResult {
     funds,
     events: s.log,
     directorInterventions: s.directorInterventions,
+    costUsd,
     digest: fnv1a(canonicalJson({ prices, navs: funds.map((f) => f.navs), tick: s.market.tickCount })),
   };
 }
@@ -284,7 +438,8 @@ export interface ExperimentManifest {
   worldConstantsHash: string;
   seeds: number[];
   engine: 'black-sheep-engine';
-  policyOnly: true;
+  /** No arm has a roster fund decided by a model. */
+  policyOnly: boolean;
 }
 
 export function experimentManifest(spec: ExperimentSpec): ExperimentManifest {
@@ -294,7 +449,7 @@ export function experimentManifest(spec: ExperimentSpec): ExperimentManifest {
     worldConstantsHash: fnv1a(canonicalJson({ ...GAME_CONFIG })),
     seeds: spec.seeds,
     engine: 'black-sheep-engine',
-    policyOnly: true,
+    policyOnly: expandArms(spec).every((a) => armModelFunds(a.config).length === 0),
   };
 }
 
@@ -313,12 +468,25 @@ export interface FundArmStats {
   name: string;
   n: number;
   totalReturn: Stat;
+  /** Percentile bootstrap 95% CI of the mean total return; null below two runs. */
+  totalReturnCI: [number, number] | null;
   maxDrawdown: Stat;
   sharpe: Stat;
   /** Share of runs the fund survived. */
   survival: number;
   /** Paired by seed against this fund's baseline arm; null in the baseline arm itself. */
-  vsBaseline: { meanDiff: number; wins: number; pairs: number } | null;
+  vsBaseline: {
+    meanDiff: number;
+    wins: number;
+    pairs: number;
+    ci: [number, number] | null;
+    /** Exact two-sided sign test on non-tied pairs. */
+    pSign: number;
+    /** pSign Holm-adjusted across every vsBaseline in the comparison. */
+    pHolm: number;
+  } | null;
+  /** Per-metric mean/std over runs (nulls skipped) and bootstrap CI; null when no run has a value. Runs stored before Phase 3 contribute nothing. */
+  behaviour: Record<keyof Behaviour, (Stat & { ci: [number, number] | null }) | null>;
   /** The first arm containing this fund (a mixed world is compared with the fund alone). */
   baselineLabel: string | null;
 }
@@ -328,6 +496,9 @@ export interface ArmComparison {
   funds: FundArmStats[];
   meanEvents: number;
   meanDirectorInterventions: number;
+  /** fallback / (llm + fallback) over the arm's decisions; null with no model brains. */
+  fallbackRate: number | null;
+  meanCostUsd: number;
 }
 
 function stat(xs: (number | null)[]): Stat {
@@ -340,11 +511,22 @@ function stat(xs: (number | null)[]): Stat {
 
 const mean = (xs: number[]) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : 0);
 
+const BEHAVIOUR_KEYS: (keyof Behaviour)[] = ['actionEntropy', 'riskCompliance', 'repeatedErrorRate', 'shockDeRisk', 'tradeRate'];
+
+function behaviourStats(rows: (Behaviour | undefined)[]): FundArmStats['behaviour'] {
+  return Object.fromEntries(
+    BEHAVIOUR_KEYS.map((k) => {
+      const v = rows.map((b) => b?.[k]).filter((x): x is number => x !== null && x !== undefined && Number.isFinite(x));
+      return [k, v.length ? { ...stat(v), ci: bootstrapMeanCI(v) } : null];
+    }),
+  ) as FundArmStats['behaviour'];
+}
+
 export function compareArms(arms: { label: string; runs: RunResult[] }[], startingCapital = STARTING_CAPITAL): ArmComparison[] {
   const returnsBySeed = (runs: RunResult[], key: string) =>
     new Map(runs.map((r) => [r.seed, seriesMetrics(r.funds.find((f) => f.key === key)?.navs ?? [], startingCapital).totalReturn]));
 
-  return arms.map((arm, i) => {
+  const out = arms.map((arm, i) => {
     const keys = [...new Set(arm.runs.flatMap((r) => r.funds.map((f) => f.key)))];
     const funds = keys.map((key): FundArmStats => {
       const runs = arm.runs.map((r) => r.funds.find((f) => f.key === key)).filter((f) => f !== undefined);
@@ -360,33 +542,53 @@ export function compareArms(arms: { label: string; runs: RunResult[] }[], starti
           const b = base.get(seed);
           if (r !== null && r !== undefined && b !== null && b !== undefined) diffs.push(r - b);
         }
-        vsBaseline = diffs.length ? { meanDiff: mean(diffs), wins: diffs.filter((d) => d > 0).length, pairs: diffs.length } : null;
+        if (diffs.length) {
+          const wins = diffs.filter((d) => d > 0).length;
+          const decisive = diffs.filter((d) => d !== 0).length;
+          // pHolm is filled in below, once every arm's p-value is known.
+          vsBaseline = { meanDiff: mean(diffs), wins, pairs: diffs.length, ci: bootstrapMeanCI(diffs), pSign: signTestP(wins, decisive), pHolm: 1 };
+        }
       }
       return {
         key,
         name: runs[0]?.name ?? key,
         n: runs.length,
         totalReturn: stat(m.map((x) => x.totalReturn)),
+        totalReturnCI: bootstrapMeanCI(m.map((x) => x.totalReturn).filter((x): x is number => x !== null && Number.isFinite(x))),
         maxDrawdown: stat(m.map((x) => x.maxDrawdown)),
         sharpe: stat(m.map((x) => x.sharpe)),
         survival: runs.length ? runs.filter((f) => !f.liquidated).length / runs.length : 0,
         vsBaseline,
+        behaviour: behaviourStats(runs.map((f) => f.behaviour)),
         baselineLabel: baseline?.label ?? null,
       };
     });
+    const sources = arm.runs.flatMap((r) => r.funds.map((f) => f.sources));
+    const fallback = sources.reduce((a, s) => a + s.fallback, 0);
+    const modelCalls = fallback + sources.reduce((a, s) => a + s.llm, 0);
     return {
       label: arm.label,
       funds,
       meanEvents: mean(arm.runs.map((r) => r.events.length)),
       meanDirectorInterventions: mean(arm.runs.map((r) => r.directorInterventions)),
+      fallbackRate: modelCalls > 0 ? fallback / modelCalls : null,
+      meanCostUsd: mean(arm.runs.map((r) => r.costUsd)),
     };
   });
+  const tested = out.flatMap((a) => a.funds).flatMap((f) => (f.vsBaseline ? [f.vsBaseline] : []));
+  holm(tested.map((v) => v.pSign)).forEach((p, i) => (tested[i].pHolm = p));
+  return out;
+}
+
+/** Raw index kept as downsampled point i of n out of len (len > n); shared so tick axes cannot drift from the values. */
+export function downsampleIndex(i: number, len: number, n: number): number {
+  return Math.round((i * (len - 1)) / (n - 1));
 }
 
 /** At most n evenly spaced points, always keeping the first and last. */
 export function downsample(xs: number[], n: number): number[] {
   if (xs.length <= n) return xs;
   const out: number[] = [];
-  for (let i = 0; i < n; i++) out.push(xs[Math.round((i * (xs.length - 1)) / (n - 1))]);
+  for (let i = 0; i < n; i++) out.push(xs[downsampleIndex(i, xs.length, n)]);
   return out;
 }
